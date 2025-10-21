@@ -1,5 +1,6 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
+
 import { AuthService } from './auth.service';
 import { LoginDto, RefreshTokenDto, LogoutDto } from './dto/login-auth.dto';
 import { RegisterDto } from './dto/register-auth.dto';
@@ -26,5 +27,10 @@ export class AuthController {
   @MessagePattern('auth.logout')
   async logout(@Payload() logoutDto: LogoutDto) {
     return this.authService.logout(logoutDto);
+  }
+
+  @Get('validate')
+  async validateToken(@Query('token') token: string) {
+    return this.authService.validateToken(token);
   }
 }

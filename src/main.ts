@@ -2,6 +2,8 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 
+import { envs } from 'config';
+
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -12,12 +14,9 @@ async function bootstrap() {
     {
       transport: Transport.NATS,
       options: {
-        servers: [
-          `nats://${process.env.NATS_HOST}:${process.env.NATS_PORT}` ||
-            'nats://localhost:4222',
-        ],
-        user: process.env.NATS_USERNAME,
-        pass: process.env.NATS_PASSWORD,
+        servers: [`nats://${envs.natsHost}:${envs.natsPort}`],
+        user: envs.natsUsername,
+        pass: envs.natsPassword,
       },
     },
   );

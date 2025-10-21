@@ -8,6 +8,8 @@ import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
+import { envs } from 'config';
+
 import { LoginDto, RefreshTokenDto } from './dto/login-auth.dto';
 import { RegisterDto } from './dto/register-auth.dto';
 import { UserPayload, AuthResponse } from './entities/user.entity';
@@ -194,5 +196,53 @@ export class AuthService {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };
+  }
+
+  async validateToken(token: string) {
+    try {
+      if (!token) {
+        return {
+          isValid: false,
+          error: 'Token no proporcionado',
+        };
+      }
+
+      // Verificar y decodificar el JWT
+      const payload = this.jwtService.verify(token, {
+        secret: envs.jwtSecretPassword,
+      }) as UserPayload;
+
+      // Verificar que el usuario existe
+      const user = await this.prisma.authUser.findUnique({
+        where: { id: payload.sub },
+      });
+
+      if (!user) {
+        return {
+          isValid: false,
+          error: 'Usuario no encontrado',
+        };
+      }
+
+      // Obtener datos completos del usuario desde user-ms
+      const userData = await this.userClient
+        .send('findUserByAuthId', user.id)
+        .toPromise();
+
+      return {
+        isValid: true,
+        userId: user.id,
+        email: user.email,
+        name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      };
+    } catch {
+      return {
+        isValid: false,
+        error: 'Token inválido o expirado',
+      };
+    }
   }
 }

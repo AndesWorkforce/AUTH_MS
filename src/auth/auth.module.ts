@@ -3,6 +3,8 @@ import { JwtModule } from '@nestjs/jwt';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { PassportModule } from '@nestjs/passport';
 
+import { envs } from 'config';
+
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { ProfileController } from './profile.controller';
@@ -18,17 +20,14 @@ import { PrismaModule } from '../prisma/prisma.module';
         name: 'USER_SERVICE',
         transport: Transport.NATS,
         options: {
-          servers: [
-            `nats://${process.env.NATS_HOST}:${process.env.NATS_PORT}` ||
-              'nats://localhost:4222',
-          ],
-          user: process.env.NATS_USERNAME,
-          pass: process.env.NATS_PASSWORD,
+          servers: [`nats://${envs.natsHost}:${envs.natsPort}`],
+          user: envs.natsUsername,
+          pass: envs.natsPassword,
         },
       },
     ]),
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'tu-secret-key-super-seguro',
+      secret: envs.jwtSecretPassword,
       signOptions: { expiresIn: '1h' },
     }),
   ],
