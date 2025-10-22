@@ -26,16 +26,26 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto): Promise<AuthResponse> {
+    console.log('AuthService - Iniciando registro:', {
+      email: registerDto.email,
+    });
+
     const { email, password } = registerDto;
 
+    console.log('AuthService - Verificando si usuario existe...');
     const existing = await this.prisma.authUser.findUnique({
       where: { email },
     });
-    if (existing) throw new ConflictException('El usuario ya existe');
+    if (existing) {
+      console.log('AuthService - Usuario ya existe');
+      throw new ConflictException('El usuario ya existe');
+    }
 
+    console.log('AuthService - Hasheando contraseña...');
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Crear solo datos de autenticación
+    console.log('AuthService - Creando usuario en auth-ms...');
     const created = await this.prisma.authUser.create({
       data: {
         email,
@@ -57,7 +67,7 @@ export class AuthService {
           nombre: registerDto.nombre,
           apellido: registerDto.apellido,
           email: registerDto.email,
-          password: hashedPassword, // Agregar password
+          password: hashedPassword,
           puesto_trabajo: registerDto.puesto_trabajo,
           horario_laboral_inicio: registerDto.horario_laboral_inicio,
           horario_laboral_fin: registerDto.horario_laboral_fin,

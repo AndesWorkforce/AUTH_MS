@@ -11,6 +11,7 @@ export class AuthController {
 
   @MessagePattern('auth.register')
   async register(@Payload() registerDto: RegisterDto) {
+    console.log('Auth-ms - Recibiendo petición de registro:', registerDto);
     return this.authService.register(registerDto);
   }
 
@@ -29,8 +30,13 @@ export class AuthController {
     return this.authService.logout(logoutDto);
   }
 
+  @MessagePattern('auth.validate')
+  async validateToken(@Payload() token: string) {
+    return this.authService.validateToken(token);
+  }
+
   @Get('validate')
-  async validateToken(@Query('token') token: string) {
+  async validateTokenHttp(@Query('token') token: string) {
     return this.authService.validateToken(token);
   }
 }
