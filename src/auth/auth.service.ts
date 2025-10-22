@@ -44,7 +44,6 @@ export class AuthService {
     console.log('AuthService - Hasheando contraseña...');
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Crear solo datos de autenticación
     console.log('AuthService - Creando usuario en auth-ms...');
     const created = await this.prisma.authUser.create({
       data: {
