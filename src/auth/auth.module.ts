@@ -7,13 +7,9 @@ import { envs } from 'config';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { ProfileController } from './profile.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
-import { PrismaModule } from '../prisma/prisma.module';
-
 @Module({
   imports: [
-    PrismaModule,
     PassportModule,
     ClientsModule.register([
       {
@@ -31,7 +27,7 @@ import { PrismaModule } from '../prisma/prisma.module';
       signOptions: { expiresIn: '1h' },
     }),
   ],
-  controllers: [AuthController, ProfileController],
+  controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
   exports: [AuthService],
 })
