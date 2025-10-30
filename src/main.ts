@@ -8,14 +8,6 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('Main');
-
-  console.log('Auth-ms - Configuración NATS:', {
-    host: envs.natsHost,
-    port: envs.natsPort,
-    username: envs.natsUsername,
-    password: envs.natsPassword ? '***' : 'undefined',
-  });
-
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(
     AppModule,
     {

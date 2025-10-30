@@ -117,31 +117,55 @@ export class AuthService {
     console.log('AuthService - Iniciando login:', { email });
 
     try {
-      // Buscar usuario en user-ms
-      const userData = await this.userClient
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
         .send('findUserByEmail', email)
         .toPromise();
+
+      let userType = 'user';
+
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientByEmail', email)
+            .toPromise();
+          userType = 'client';
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
       if (!userData) {
         throw new UnauthorizedException('Credenciales inválidas');
       }
 
-      // Verificar contraseña
-      const ok = await bcrypt.compare(password, userData.password);
-      if (!ok) {
-        throw new UnauthorizedException('Credenciales inválidas');
+      // 3. Verificar contraseña (solo si existe)
+      if (userData.password) {
+        const ok = await bcrypt.compare(password, userData.password);
+        if (!ok) {
+          throw new UnauthorizedException('Credenciales inválidas');
+        }
+      } else {
+        // Cliente sin contraseña - permitir login (para casos donde no se requiere password)
+        console.log('AuthService - Cliente sin contraseña, permitiendo login');
       }
 
       const tokens = await this.generateTokens({
         sub: userData.id,
-        email: userData.email,
+        email: userData.email || userData.nombre,
         name: userData.nombre,
+      });
+
+      console.log(`AuthService - Login exitoso para ${userType}:`, { 
+        id: userData.id, 
+        email: userData.email || userData.nombre 
       });
 
       return {
         user: {
           id: userData.id,
-          email: userData.email,
+          email: userData.email || userData.nombre,
           name: userData.nombre,
           isActive: true,
           createdAt: userData.fecha_creacion,
@@ -166,10 +190,21 @@ export class AuthService {
     if (!userId) throw new UnauthorizedException('Refresh token inválido');
 
     try {
-      // Obtener datos del usuario desde user-ms
-      const userData = await this.userClient
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
         .send('findUserById', userId)
         .toPromise();
+
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientById', userId)
+            .toPromise();
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
       if (!userData) {
         throw new UnauthorizedException('Usuario no encontrado');
@@ -177,7 +212,7 @@ export class AuthService {
 
       const payload: UserPayload = {
         sub: userData.id,
-        email: userData.email,
+        email: userData.email || userData.nombre,
         name: userData.nombre,
       };
       const accessToken = this.jwtService.sign(payload);
@@ -219,16 +254,27 @@ export class AuthService {
   // Método para validar JWT (para guards)
   async validateUser(payload: UserPayload) {
     try {
-      // Obtener datos del usuario desde user-ms
-      const userData = await this.userClient
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
         .send('findUserById', payload.sub)
         .toPromise();
+
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientById', payload.sub)
+            .toPromise();
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
       if (!userData) return null;
 
       return {
         id: userData.id,
-        email: userData.email,
+        email: userData.email || userData.nombre,
         name: userData.nombre,
         isActive: true,
         createdAt: userData.fecha_creacion,
@@ -254,10 +300,21 @@ export class AuthService {
         secret: envs.jwtSecretPassword,
       }) as UserPayload;
 
-      // Obtener datos del usuario desde user-ms
-      const userData = await this.userClient
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
         .send('findUserById', payload.sub)
         .toPromise();
+
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientById', payload.sub)
+            .toPromise();
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
       if (!userData) {
         return {
@@ -269,7 +326,7 @@ export class AuthService {
       return {
         isValid: true,
         userId: userData.id,
-        email: userData.email,
+        email: userData.email || userData.nombre,
         name: userData.nombre,
         isActive: true,
         createdAt: userData.fecha_creacion,
