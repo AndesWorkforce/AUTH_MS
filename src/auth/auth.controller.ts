@@ -12,19 +12,11 @@ export class AuthController {
 
   @MessagePattern('auth.register.user')
   async registerUser(@Payload() registerDto: RegisterUserDto) {
-    console.log(
-      'Auth-ms - Recibiendo petición de registro de usuario:',
-      registerDto,
-    );
     return this.authService.registerUser(registerDto);
   }
 
   @MessagePattern('auth.register.client')
   async registerClient(@Payload() registerDto: RegisterClientDto) {
-    console.log(
-      'Auth-ms - Recibiendo petición de registro de cliente:',
-      registerDto,
-    );
     return this.authService.registerClient(registerDto);
   }
 
