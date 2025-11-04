@@ -38,7 +38,7 @@ export class AuthService {
     try {
       const createdUser = await this.userClient
         .send('createUser', {
-          nombre: registerDto.nombre,
+          name: registerDto.name,
           email: registerDto.email,
           password: hashedPassword,
           role: registerDto.role,
@@ -48,17 +48,17 @@ export class AuthService {
       const tokens = await this.generateTokens({
         sub: createdUser.id,
         email: createdUser.email,
-        name: registerDto.nombre,
+        name: registerDto.name,
       });
 
       return {
         user: {
           id: createdUser.id,
           email: createdUser.email,
-          name: registerDto.nombre,
+          name: registerDto.name,
           isActive: true,
-          createdAt: createdUser.fecha_creacion,
-          updatedAt: createdUser.fecha_actualizacion,
+          createdAt: createdUser.created_at,
+          updatedAt: createdUser.updated_at,
         },
         ...tokens,
       };
@@ -72,15 +72,15 @@ export class AuthService {
 
   async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
     console.log('AuthService - Iniciando registro de cliente:', {
-      nombre: registerDto.nombre,
+      name: registerDto.name,
     });
 
     console.log('AuthService - Creando cliente en user-ms...');
     try {
       const createdClient = await this.userClient
         .send('createClient', {
-          nombre: registerDto.nombre,
-          descripcion: registerDto.descripcion,
+          name: registerDto.name,
+          description: registerDto.description,
           email: registerDto.email,
           password: registerDto.password,
         })
@@ -88,18 +88,18 @@ export class AuthService {
 
       const tokens = await this.generateTokens({
         sub: createdClient.id,
-        email: createdClient.email || createdClient.nombre,
-        name: createdClient.nombre,
+        email: createdClient.email || createdClient.name,
+        name: createdClient.name,
       });
 
       return {
         user: {
           id: createdClient.id,
-          email: createdClient.email || createdClient.nombre,
-          name: createdClient.nombre,
+          email: createdClient.email || createdClient.name,
+          name: createdClient.name,
           isActive: true,
-          createdAt: createdClient.fecha_creacion,
-          updatedAt: createdClient.fecha_actualizacion,
+          createdAt: createdClient.created_at,
+          updatedAt: createdClient.updated_at,
         },
         ...tokens,
       };
@@ -153,23 +153,23 @@ export class AuthService {
 
       const tokens = await this.generateTokens({
         sub: userData.id,
-        email: userData.email || userData.nombre,
-        name: userData.nombre,
+        email: userData.email || userData.name,
+        name: userData.name,
       });
 
       console.log(`AuthService - Login exitoso para ${userType}:`, { 
         id: userData.id, 
-        email: userData.email || userData.nombre 
+        email: userData.email || userData.name 
       });
 
       return {
         user: {
           id: userData.id,
-          email: userData.email || userData.nombre,
-          name: userData.nombre,
+          email: userData.email || userData.name,
+          name: userData.name,
           isActive: true,
-          createdAt: userData.fecha_creacion,
-          updatedAt: userData.fecha_actualizacion,
+          createdAt: userData.created_at,
+          updatedAt: userData.updated_at,
         },
         ...tokens,
       };
@@ -212,8 +212,8 @@ export class AuthService {
 
       const payload: UserPayload = {
         sub: userData.id,
-        email: userData.email || userData.nombre,
-        name: userData.nombre,
+        email: userData.email || userData.name,
+        name: userData.name,
       };
       const accessToken = this.jwtService.sign(payload);
       return { accessToken };
@@ -274,11 +274,11 @@ export class AuthService {
 
       return {
         id: userData.id,
-        email: userData.email || userData.nombre,
-        name: userData.nombre,
+        email: userData.email || userData.name,
+        name: userData.name,
         isActive: true,
-        createdAt: userData.fecha_creacion,
-        updatedAt: userData.fecha_actualizacion,
+        createdAt: userData.created_at,
+        updatedAt: userData.updated_at,
       };
     } catch (error) {
       console.error('Error al validar usuario:', error);
@@ -326,11 +326,11 @@ export class AuthService {
       return {
         isValid: true,
         userId: userData.id,
-        email: userData.email || userData.nombre,
-        name: userData.nombre,
+        email: userData.email || userData.name,
+        name: userData.name,
         isActive: true,
-        createdAt: userData.fecha_creacion,
-        updatedAt: userData.fecha_actualizacion,
+        createdAt: userData.created_at,
+        updatedAt: userData.updated_at,
       };
     } catch {
       return {

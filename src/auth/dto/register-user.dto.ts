@@ -15,7 +15,7 @@ export enum Role {
 export class RegisterUserDto {
   @IsString()
   @IsNotEmpty()
-  nombre: string;
+  name: string;
 
   @IsEmail()
   @IsNotEmpty()

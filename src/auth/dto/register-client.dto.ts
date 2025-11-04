@@ -3,11 +3,11 @@ import { IsEmail, IsNotEmpty, IsString, IsOptional } from 'class-validator';
 export class RegisterClientDto {
   @IsString()
   @IsNotEmpty()
-  nombre: string;
+  name: string;
 
   @IsString()
   @IsOptional()
-  descripcion?: string;
+  description?: string;
 
   @IsEmail()
   @IsOptional()
