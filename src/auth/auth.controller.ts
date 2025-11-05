@@ -1,16 +1,23 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
+
 import { AuthService } from './auth.service';
 import { LoginDto, RefreshTokenDto, LogoutDto } from './dto/login-auth.dto';
-import { RegisterDto } from './dto/register-auth.dto';
+import { RegisterClientDto } from './dto/register-client.dto';
+import { RegisterUserDto } from './dto/register-user.dto';
 
 @Controller()
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @MessagePattern('auth.register')
-  async register(@Payload() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+  @MessagePattern('auth.register.user')
+  async registerUser(@Payload() registerDto: RegisterUserDto) {
+    return this.authService.registerUser(registerDto);
+  }
+
+  @MessagePattern('auth.register.client')
+  async registerClient(@Payload() registerDto: RegisterClientDto) {
+    return this.authService.registerClient(registerDto);
   }
 
   @MessagePattern('auth.login')
@@ -26,5 +33,15 @@ export class AuthController {
   @MessagePattern('auth.logout')
   async logout(@Payload() logoutDto: LogoutDto) {
     return this.authService.logout(logoutDto);
+  }
+
+  @MessagePattern('auth.validate')
+  async validateToken(@Payload() token: string) {
+    return this.authService.validateToken(token);
+  }
+
+  @Get('validate')
+  async validateTokenHttp(@Query('token') token: string) {
+    return this.authService.validateToken(token);
   }
 }

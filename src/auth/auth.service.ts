@@ -8,10 +8,12 @@ import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
+import { envs } from 'config';
+
 import { LoginDto, RefreshTokenDto } from './dto/login-auth.dto';
-import { RegisterDto } from './dto/register-auth.dto';
+import { RegisterClientDto } from './dto/register-client.dto';
+import { RegisterUserDto } from './dto/register-user.dto';
 import { UserPayload, AuthResponse } from './entities/user.entity';
-import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class AuthService {
@@ -19,104 +21,165 @@ export class AuthService {
 
   constructor(
     private readonly jwtService: JwtService,
-    private readonly prisma: PrismaService,
     @Inject('USER_SERVICE') private readonly userClient: ClientProxy,
   ) {}
 
-  async register(registerDto: RegisterDto): Promise<AuthResponse> {
-    const { email, password } = registerDto;
-
-    const existing = await this.prisma.authUser.findUnique({
-      where: { email },
+  async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
+    console.log('AuthService - Iniciando registro de usuario:', {
+      email: registerDto.email,
     });
-    if (existing) throw new ConflictException('El usuario ya existe');
 
+    const { password } = registerDto;
+
+    console.log('AuthService - Hasheando contraseña...');
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Crear solo datos de autenticación
-    const created = await this.prisma.authUser.create({
-      data: {
-        email,
-        password: hashedPassword,
-      },
-    });
-
-    const tokens = await this.generateTokens({
-      sub: created.id,
-      email: created.email,
-      name: `${registerDto.nombre} ${registerDto.apellido}`,
-    });
-
-    // Crear usuario completo en user-ms vía NATS
+    console.log('AuthService - Creando usuario en user-ms...');
     try {
-      await this.userClient
+      const createdUser = await this.userClient
         .send('createUser', {
-          auth_user_id: created.id,
-          nombre: registerDto.nombre,
-          apellido: registerDto.apellido,
+          name: registerDto.name,
           email: registerDto.email,
-          password: hashedPassword, // Agregar password
-          puesto_trabajo: registerDto.puesto_trabajo,
-          horario_laboral_inicio: registerDto.horario_laboral_inicio,
-          horario_laboral_fin: registerDto.horario_laboral_fin,
-          cliente_id: registerDto.cliente_id,
-          team_id: registerDto.team_id,
-          subteam_id: registerDto.subteam_id,
+          password: hashedPassword,
+          role: registerDto.role,
         })
         .toPromise();
+
+      const tokens = await this.generateTokens({
+        sub: createdUser.id,
+        email: createdUser.email,
+        name: registerDto.name,
+      });
+
+      return {
+        user: {
+          id: createdUser.id,
+          email: createdUser.email,
+          name: registerDto.name,
+          isActive: true,
+          createdAt: createdUser.created_at,
+          updatedAt: createdUser.updated_at,
+        },
+        ...tokens,
+      };
     } catch (error) {
-      // Si falla la creación en user-ms, eliminar el usuario de auth
-      await this.prisma.authUser.delete({ where: { id: created.id } });
       console.error('Error al crear usuario en user-ms:', error);
-      throw new Error(
-        `Error al crear usuario completo: ${error.message}. Por favor, intente nuevamente.`,
+      throw new ConflictException(
+        `Error al crear usuario: ${error.message}. Por favor, intente nuevamente.`,
       );
     }
+  }
 
-    return {
-      user: {
-        id: created.id,
-        email: created.email,
-        name: `${registerDto.nombre} ${registerDto.apellido}`,
-        isActive: created.isActive,
-        createdAt: created.createdAt,
-        updatedAt: created.updatedAt,
-      },
-      ...tokens,
-    };
+  async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
+    console.log('AuthService - Iniciando registro de cliente:', {
+      name: registerDto.name,
+    });
+
+    console.log('AuthService - Creando cliente en user-ms...');
+    try {
+      const createdClient = await this.userClient
+        .send('createClient', {
+          name: registerDto.name,
+          description: registerDto.description,
+          email: registerDto.email,
+          password: registerDto.password,
+        })
+        .toPromise();
+
+      const tokens = await this.generateTokens({
+        sub: createdClient.id,
+        email: createdClient.email || createdClient.name,
+        name: createdClient.name,
+      });
+
+      return {
+        user: {
+          id: createdClient.id,
+          email: createdClient.email || createdClient.name,
+          name: createdClient.name,
+          isActive: true,
+          createdAt: createdClient.created_at,
+          updatedAt: createdClient.updated_at,
+        },
+        ...tokens,
+      };
+    } catch (error) {
+      console.error('Error al crear cliente en user-ms:', error);
+      throw new ConflictException(
+        `Error al crear cliente: ${error.message}. Por favor, intente nuevamente.`,
+      );
+    }
   }
 
   async login(loginDto: LoginDto): Promise<AuthResponse> {
     const { email, password } = loginDto;
 
-    const user = await this.prisma.authUser.findUnique({ where: { email } });
-    if (!user) throw new UnauthorizedException('Credenciales inválidas');
+    console.log('AuthService - Iniciando login:', { email });
 
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) throw new UnauthorizedException('Credenciales inválidas');
+    try {
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
+        .send('findUserByEmail', email)
+        .toPromise();
 
-    // Obtener datos completos del usuario desde user-ms vía NATS
-    const userData = await this.userClient
-      .send('findUserByAuthId', user.id)
-      .toPromise();
+      let userType = 'user';
 
-    const tokens = await this.generateTokens({
-      sub: user.id,
-      email: user.email,
-      name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-    });
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientByEmail', email)
+            .toPromise();
+          userType = 'client';
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-        isActive: user.isActive,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-      },
-      ...tokens,
-    };
+      if (!userData) {
+        throw new UnauthorizedException('Credenciales inválidas');
+      }
+
+      // 3. Verificar contraseña (solo si existe)
+      if (userData.password) {
+        const ok = await bcrypt.compare(password, userData.password);
+        if (!ok) {
+          throw new UnauthorizedException('Credenciales inválidas');
+        }
+      } else {
+        // Cliente sin contraseña - permitir login (para casos donde no se requiere password)
+        console.log('AuthService - Cliente sin contraseña, permitiendo login');
+      }
+
+      const tokens = await this.generateTokens({
+        sub: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+      });
+
+      console.log(`AuthService - Login exitoso para ${userType}:`, { 
+        id: userData.id, 
+        email: userData.email || userData.name 
+      });
+
+      return {
+        user: {
+          id: userData.id,
+          email: userData.email || userData.name,
+          name: userData.name,
+          isActive: true,
+          createdAt: userData.created_at,
+          updatedAt: userData.updated_at,
+        },
+        ...tokens,
+      };
+    } catch (error) {
+      console.error('Error en login:', error);
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Error al autenticar usuario');
+    }
   }
 
   async refreshToken(
@@ -126,23 +189,38 @@ export class AuthService {
     const userId = this.refreshTokens.get(refreshToken);
     if (!userId) throw new UnauthorizedException('Refresh token inválido');
 
-    const user = await this.prisma.authUser.findUnique({
-      where: { id: userId },
-    });
-    if (!user) throw new UnauthorizedException('Usuario no encontrado');
+    try {
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
+        .send('findUserById', userId)
+        .toPromise();
 
-    // Obtener datos completos del usuario desde user-ms vía NATS
-    const userData = await this.userClient
-      .send('findUserByAuthId', user.id)
-      .toPromise();
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientById', userId)
+            .toPromise();
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
-    const payload: UserPayload = {
-      sub: user.id,
-      email: user.email,
-      name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-    };
-    const accessToken = this.jwtService.sign(payload);
-    return { accessToken };
+      if (!userData) {
+        throw new UnauthorizedException('Usuario no encontrado');
+      }
+
+      const payload: UserPayload = {
+        sub: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+      };
+      const accessToken = this.jwtService.sign(payload);
+      return { accessToken };
+    } catch (error) {
+      console.error('Error en refresh token:', error);
+      throw new UnauthorizedException('Error al renovar token');
+    }
   }
 
   logout(logoutDto: RefreshTokenDto): Promise<{ message: string }> {
@@ -175,24 +253,90 @@ export class AuthService {
 
   // Método para validar JWT (para guards)
   async validateUser(payload: UserPayload) {
-    const user = await this.prisma.authUser.findUnique({
-      where: { id: payload.sub },
-    });
+    try {
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
+        .send('findUserById', payload.sub)
+        .toPromise();
 
-    if (!user) return null;
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientById', payload.sub)
+            .toPromise();
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
 
-    // Obtener datos completos del usuario desde user-ms vía NATS
-    const userData = await this.userClient
-      .send('findUserByAuthId', user.id)
-      .toPromise();
+      if (!userData) return null;
 
-    return {
-      id: user.id,
-      email: user.email,
-      name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-      isActive: user.isActive,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-    };
+      return {
+        id: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+        isActive: true,
+        createdAt: userData.created_at,
+        updatedAt: userData.updated_at,
+      };
+    } catch (error) {
+      console.error('Error al validar usuario:', error);
+      return null;
+    }
+  }
+
+  async validateToken(token: string) {
+    try {
+      if (!token) {
+        return {
+          isValid: false,
+          error: 'Token no proporcionado',
+        };
+      }
+
+      // Verificar y decodificar el JWT
+      const payload = this.jwtService.verify(token, {
+        secret: envs.jwtSecretPassword,
+      }) as UserPayload;
+
+      // 1. Buscar primero en usuarios
+      let userData = await this.userClient
+        .send('findUserById', payload.sub)
+        .toPromise();
+
+      // 2. Si no existe, buscar en clientes
+      if (!userData) {
+        try {
+          userData = await this.userClient
+            .send('findClientById', payload.sub)
+            .toPromise();
+        } catch (error) {
+          // Cliente no encontrado, continuar con error genérico
+        }
+      }
+
+      if (!userData) {
+        return {
+          isValid: false,
+          error: 'Usuario no encontrado',
+        };
+      }
+
+      return {
+        isValid: true,
+        userId: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+        isActive: true,
+        createdAt: userData.created_at,
+        updatedAt: userData.updated_at,
+      };
+    } catch {
+      return {
+        isValid: false,
+        error: 'Token inválido o expirado',
+      };
+    }
   }
 }
