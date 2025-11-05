@@ -25,26 +25,37 @@ export class AuthService {
   ) {}
 
   async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
-    console.log('AuthService - Iniciando registro de usuario:', {
-      email: registerDto.email,
-    });
+
+    if (!registerDto.name) {
+      throw new ConflictException('El campo name es requerido');
+    }
+    if (!registerDto.email) {
+      throw new ConflictException('El campo email es requerido');
+    }
+    if (!registerDto.password) {
+      throw new ConflictException('El campo password es requerido');
+    }
+    if (!registerDto.role) {
+      throw new ConflictException('El campo role es requerido');
+    }
 
     const { password } = registerDto;
 
-    console.log('AuthService - Hasheando contraseña...');
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    console.log('AuthService - Creando usuario en user-ms...');
+    // Preparar el payload completo ANTES de enviarlo
+    const userPayload = {
+      name: registerDto.name,
+      email: registerDto.email,
+      password: hashedPassword,
+      role: registerDto.role,
+    };
+
     try {
       const createdUser = await this.userClient
-        .send('createUser', {
-          name: registerDto.name,
-          email: registerDto.email,
-          password: hashedPassword,
-          role: registerDto.role,
-        })
+        .send('createUser', userPayload)
         .toPromise();
-
+        
       const tokens = await this.generateTokens({
         sub: createdUser.id,
         email: createdUser.email,
@@ -64,6 +75,11 @@ export class AuthService {
       };
     } catch (error) {
       console.error('Error al crear usuario en user-ms:', error);
+      
+      if (error?.message?.includes('already exists') || error?.message?.includes('duplicate')) {
+        throw new ConflictException('El usuario ya existe con este email');
+      }
+      
       throw new ConflictException(
         `Error al crear usuario: ${error.message}. Por favor, intente nuevamente.`,
       );
@@ -71,11 +87,7 @@ export class AuthService {
   }
 
   async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
-    console.log('AuthService - Iniciando registro de cliente:', {
-      name: registerDto.name,
-    });
 
-    console.log('AuthService - Creando cliente en user-ms...');
     try {
       const createdClient = await this.userClient
         .send('createClient', {
@@ -114,7 +126,6 @@ export class AuthService {
   async login(loginDto: LoginDto): Promise<AuthResponse> {
     const { email, password } = loginDto;
 
-    console.log('AuthService - Iniciando login:', { email });
 
     try {
       // 1. Buscar primero en usuarios
