@@ -27,16 +27,16 @@ export class AuthService {
   async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
 
     if (!registerDto.name) {
-      throw new ConflictException('El campo name es requerido');
+      throw new ConflictException('The name field is required');
     }
     if (!registerDto.email) {
-      throw new ConflictException('El campo email es requerido');
+      throw new ConflictException('The email field is required');
     }
     if (!registerDto.password) {
-      throw new ConflictException('El campo password es requerido');
+      throw new ConflictException('The password field is required');
     }
     if (!registerDto.role) {
-      throw new ConflictException('El campo role es requerido');
+      throw new ConflictException('The role field is required');
     }
 
     const { password } = registerDto;
@@ -74,14 +74,14 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      console.error('Error al crear usuario en user-ms:', error);
+      console.error('Error creating user in user-ms:', error);
       
       if (error?.message?.includes('already exists') || error?.message?.includes('duplicate')) {
-        throw new ConflictException('El usuario ya existe con este email');
+        throw new ConflictException('A user with this email already exists');
       }
       
       throw new ConflictException(
-        `Error al crear usuario: ${error.message}. Por favor, intente nuevamente.`,
+        `Error creating user: ${error.message}. Please try again.`,
       );
     }
   }
@@ -116,9 +116,9 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      console.error('Error al crear cliente en user-ms:', error);
+      console.error('Error creating client in user-ms:', error);
       throw new ConflictException(
-        `Error al crear cliente: ${error.message}. Por favor, intente nuevamente.`,
+        `Error creating client: ${error.message}. Please try again.`,
       );
     }
   }
@@ -148,18 +148,18 @@ export class AuthService {
       }
 
       if (!userData) {
-        throw new UnauthorizedException('Credenciales inválidas');
+        throw new UnauthorizedException('Invalid credentials');
       }
 
       // 3. Verificar contraseña (solo si existe)
       if (userData.password) {
         const ok = await bcrypt.compare(password, userData.password);
         if (!ok) {
-          throw new UnauthorizedException('Credenciales inválidas');
+          throw new UnauthorizedException('Invalid credentials');
         }
       } else {
-        // Cliente sin contraseña - permitir login (para casos donde no se requiere password)
-        console.log('AuthService - Cliente sin contraseña, permitiendo login');
+        // Client without password - allow login (for cases where password is not required)
+        console.log('AuthService - Client without password, allowing login');
       }
 
       const tokens = await this.generateTokens({
@@ -168,7 +168,7 @@ export class AuthService {
         name: userData.name,
       });
 
-      console.log(`AuthService - Login exitoso para ${userType}:`, { 
+      console.log(`AuthService - Successful login for ${userType}:`, { 
         id: userData.id, 
         email: userData.email || userData.name 
       });
@@ -185,11 +185,11 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      console.error('Error en login:', error);
+      console.error('Error during login:', error);
       if (error instanceof UnauthorizedException) {
         throw error;
       }
-      throw new UnauthorizedException('Error al autenticar usuario');
+      throw new UnauthorizedException('Error authenticating user');
     }
   }
 
@@ -198,7 +198,7 @@ export class AuthService {
   ): Promise<{ accessToken: string }> {
     const { refreshToken } = refreshTokenDto;
     const userId = this.refreshTokens.get(refreshToken);
-    if (!userId) throw new UnauthorizedException('Refresh token inválido');
+    if (!userId) throw new UnauthorizedException('Invalid refresh token');
 
     try {
       // 1. Buscar primero en usuarios
@@ -218,7 +218,7 @@ export class AuthService {
       }
 
       if (!userData) {
-        throw new UnauthorizedException('Usuario no encontrado');
+        throw new UnauthorizedException('User not found');
       }
 
       const payload: UserPayload = {
@@ -229,8 +229,8 @@ export class AuthService {
       const accessToken = this.jwtService.sign(payload);
       return { accessToken };
     } catch (error) {
-      console.error('Error en refresh token:', error);
-      throw new UnauthorizedException('Error al renovar token');
+      console.error('Error refreshing token:', error);
+      throw new UnauthorizedException('Error renewing token');
     }
   }
 
@@ -240,7 +240,7 @@ export class AuthService {
     // Eliminar refresh token
     this.refreshTokens.delete(refreshToken);
 
-    return Promise.resolve({ message: 'Logout exitoso' });
+    return Promise.resolve({ message: 'Logout successful' });
   }
 
   private generateTokens(
@@ -292,7 +292,7 @@ export class AuthService {
         updatedAt: userData.updated_at,
       };
     } catch (error) {
-      console.error('Error al validar usuario:', error);
+      console.error('Error validating user:', error);
       return null;
     }
   }
@@ -302,7 +302,7 @@ export class AuthService {
       if (!token) {
         return {
           isValid: false,
-          error: 'Token no proporcionado',
+          error: 'Token not provided',
         };
       }
 
@@ -330,7 +330,7 @@ export class AuthService {
       if (!userData) {
         return {
           isValid: false,
-          error: 'Usuario no encontrado',
+          error: 'User not found',
         };
       }
 
@@ -346,7 +346,7 @@ export class AuthService {
     } catch {
       return {
         isValid: false,
-        error: 'Token inválido o expirado',
+        error: 'Invalid or expired token',
       };
     }
   }
