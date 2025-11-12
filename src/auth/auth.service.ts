@@ -1,9 +1,10 @@
 import {
   Injectable,
   UnauthorizedException,
-  ConflictException,
   Inject,
   Logger,
+  ConflictException,
+
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
@@ -11,6 +12,11 @@ import * as bcrypt from 'bcryptjs';
 
 import { envs, logError } from 'config';
 
+import {
+  ValidationException,
+  DuplicateEntityException,
+  EntityNotFoundException,
+} from '../common';
 import { LoginDto, RefreshTokenDto } from './dto/login-auth.dto';
 import { RegisterClientDto } from './dto/register-client.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
@@ -18,8 +24,8 @@ import { UserPayload, AuthResponse } from './entities/user.entity';
 
 @Injectable()
 export class AuthService {
-  private refreshTokens: Map<string, string> = new Map();
   private readonly logger = new Logger(AuthService.name);
+  private refreshTokens: Map<string, string> = new Map();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -27,6 +33,7 @@ export class AuthService {
   ) {}
 
   async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
+    const errors: Record<string, string[]> = {};
 
     if (!registerDto.name) {
       throw new ConflictException('The name field is required');
@@ -57,7 +64,7 @@ export class AuthService {
       const createdUser = await this.userClient
         .send('createUser', userPayload)
         .toPromise();
-        
+
       const tokens = await this.generateTokens({
         sub: createdUser.id,
         email: createdUser.email,
@@ -77,19 +84,21 @@ export class AuthService {
       };
     } catch (error) {
       logError(this.logger, 'Error creating user in user-ms', error);
-      
-      if (error?.message?.includes('already exists') || error?.message?.includes('duplicate')) {
-        throw new ConflictException('A user with this email already exists');
+
+      if (
+        error?.message?.includes('already exists') ||
+        error?.message?.includes('duplicate')
+      ) {
+        throw new DuplicateEntityException('User', 'email', registerDto.email);
       }
-      
-      throw new ConflictException(
+
+      throw new ValidationException(
         `Error creating user: ${error.message}. Please try again.`,
       );
     }
   }
 
   async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
-
     try {
       const createdClient = await this.userClient
         .send('createClient', {
@@ -119,7 +128,15 @@ export class AuthService {
       };
     } catch (error) {
       logError(this.logger, 'Error creating client in user-ms', error);
-      throw new ConflictException(
+
+      if (
+        error?.message?.includes('already exists') ||
+        error?.message?.includes('duplicate')
+      ) {
+        throw new DuplicateEntityException('Client', 'name', registerDto.name);
+      }
+
+      throw new ValidationException(
         `Error creating client: ${error.message}. Please try again.`,
       );
     }
@@ -127,7 +144,6 @@ export class AuthService {
 
   async login(loginDto: LoginDto): Promise<AuthResponse> {
     const { email, password } = loginDto;
-
 
     try {
       // 1. Buscar primero en usuarios
@@ -153,14 +169,12 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
-      // 3. Verificar contraseña
-      if (!userData.password) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
-
-      const ok = await bcrypt.compare(password, userData.password);
-      if (!ok) {
-        throw new UnauthorizedException('Invalid credentials');
+      // 3. Verificar contraseña (solo si existe)
+      if (userData.password) {
+        const ok = await bcrypt.compare(password, userData.password);
+        if (!ok) {
+          throw new UnauthorizedException('Invalid credentials');
+        }
       }
 
       const tokens = await this.generateTokens({
@@ -219,7 +233,7 @@ export class AuthService {
       }
 
       if (!userData) {
-        throw new UnauthorizedException('User not found');
+        throw new EntityNotFoundException('User', userId);
       }
 
       const payload: UserPayload = {
