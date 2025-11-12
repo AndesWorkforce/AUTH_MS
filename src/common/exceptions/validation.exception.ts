@@ -1,11 +1,17 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
+import { errorDictionary, Language } from '../i18n';
+
 export class ValidationException extends HttpException {
-  constructor(message: string, errors?: Record<string, string[]>) {
+  constructor(
+    message: string,
+    errors?: Record<string, string[]>,
+    lang: Language = 'en',
+  ) {
     super(
       {
         statusCode: HttpStatus.BAD_REQUEST,
-        message,
+        message: errorDictionary.get('VALIDATION_ERROR', lang),
         errors,
         errorCode: 'VALIDATION_ERROR',
         timestamp: new Date().toISOString(),
