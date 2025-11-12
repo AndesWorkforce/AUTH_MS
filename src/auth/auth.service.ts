@@ -1,8 +1,8 @@
 import {
   Injectable,
   UnauthorizedException,
-  ConflictException,
   Inject,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
@@ -10,6 +10,11 @@ import * as bcrypt from 'bcryptjs';
 
 import { envs } from 'config';
 
+import {
+  ValidationException,
+  DuplicateEntityException,
+  EntityNotFoundException,
+} from '../common';
 import { LoginDto, RefreshTokenDto } from './dto/login-auth.dto';
 import { RegisterClientDto } from './dto/register-client.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
@@ -17,6 +22,7 @@ import { UserPayload, AuthResponse } from './entities/user.entity';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private refreshTokens: Map<string, string> = new Map();
 
   constructor(
@@ -25,18 +31,23 @@ export class AuthService {
   ) {}
 
   async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
+    const errors: Record<string, string[]> = {};
 
     if (!registerDto.name) {
-      throw new ConflictException('The name field is required');
+      errors.name = ['Field name is required'];
     }
     if (!registerDto.email) {
-      throw new ConflictException('The email field is required');
+      errors.email = ['Field email is required'];
     }
     if (!registerDto.password) {
-      throw new ConflictException('The password field is required');
+      errors.password = ['Field password is required'];
     }
     if (!registerDto.role) {
-      throw new ConflictException('The role field is required');
+      errors.role = ['Field role is required'];
+    }
+
+    if (Object.keys(errors).length > 0) {
+      throw new ValidationException('Validation failed', errors);
     }
 
     const { password } = registerDto;
@@ -55,7 +66,7 @@ export class AuthService {
       const createdUser = await this.userClient
         .send('createUser', userPayload)
         .toPromise();
-        
+
       const tokens = await this.generateTokens({
         sub: createdUser.id,
         email: createdUser.email,
@@ -74,20 +85,22 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      console.error('Error creating user in user-ms:', error);
-      
-      if (error?.message?.includes('already exists') || error?.message?.includes('duplicate')) {
-        throw new ConflictException('A user with this email already exists');
+      this.logger.error('Error creating user in user-ms:', error);
+
+      if (
+        error?.message?.includes('already exists') ||
+        error?.message?.includes('duplicate')
+      ) {
+        throw new DuplicateEntityException('User', 'email', registerDto.email);
       }
-      
-      throw new ConflictException(
+
+      throw new ValidationException(
         `Error creating user: ${error.message}. Please try again.`,
       );
     }
   }
 
   async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
-
     try {
       const createdClient = await this.userClient
         .send('createClient', {
@@ -116,8 +129,16 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      console.error('Error creating client in user-ms:', error);
-      throw new ConflictException(
+      this.logger.error('Error creating client in user-ms:', error);
+
+      if (
+        error?.message?.includes('already exists') ||
+        error?.message?.includes('duplicate')
+      ) {
+        throw new DuplicateEntityException('Client', 'name', registerDto.name);
+      }
+
+      throw new ValidationException(
         `Error creating client: ${error.message}. Please try again.`,
       );
     }
@@ -125,7 +146,6 @@ export class AuthService {
 
   async login(loginDto: LoginDto): Promise<AuthResponse> {
     const { email, password } = loginDto;
-
 
     try {
       // 1. Buscar primero en usuarios
@@ -143,6 +163,10 @@ export class AuthService {
             .toPromise();
           userType = 'client';
         } catch (error) {
+          this.logger.error(
+            `Error finding client by email: ${error.message}`,
+            error.stack,
+          );
           // Cliente no encontrado, continuar con error genérico
         }
       }
@@ -159,7 +183,7 @@ export class AuthService {
         }
       } else {
         // Client without password - allow login (for cases where password is not required)
-        console.log('AuthService - Client without password, allowing login');
+        this.logger.log('Client without password, allowing login');
       }
 
       const tokens = await this.generateTokens({
@@ -168,9 +192,9 @@ export class AuthService {
         name: userData.name,
       });
 
-      console.log(`AuthService - Successful login for ${userType}:`, { 
-        id: userData.id, 
-        email: userData.email || userData.name 
+      this.logger.log(`Successful login for ${userType}:`, {
+        id: userData.id,
+        email: userData.email || userData.name,
       });
 
       return {
@@ -185,7 +209,7 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      console.error('Error during login:', error);
+      this.logger.error('Error during login:', error);
       if (error instanceof UnauthorizedException) {
         throw error;
       }
@@ -213,12 +237,16 @@ export class AuthService {
             .send('findClientById', userId)
             .toPromise();
         } catch (error) {
+          this.logger.error(
+            `Error finding client by id: ${error.message}`,
+            error.stack,
+          );
           // Cliente no encontrado, continuar con error genérico
         }
       }
 
       if (!userData) {
-        throw new UnauthorizedException('User not found');
+        throw new EntityNotFoundException('User', userId);
       }
 
       const payload: UserPayload = {
@@ -229,7 +257,10 @@ export class AuthService {
       const accessToken = this.jwtService.sign(payload);
       return { accessToken };
     } catch (error) {
-      console.error('Error refreshing token:', error);
+      this.logger.error('Error refreshing token:', error);
+      if (error instanceof EntityNotFoundException) {
+        throw error;
+      }
       throw new UnauthorizedException('Error renewing token');
     }
   }
@@ -277,6 +308,10 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
+          this.logger.error(
+            `Error finding client by id in validate: ${error.message}`,
+            error.stack,
+          );
           // Cliente no encontrado, continuar con error genérico
         }
       }
@@ -292,7 +327,7 @@ export class AuthService {
         updatedAt: userData.updated_at,
       };
     } catch (error) {
-      console.error('Error validating user:', error);
+      this.logger.error('Error validating user:', error);
       return null;
     }
   }
@@ -323,6 +358,10 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
+          this.logger.error(
+            `Error finding client by id in verifyToken: ${error.message}`,
+            error.stack,
+          );
           // Cliente no encontrado, continuar con error genérico
         }
       }
