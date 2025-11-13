@@ -3,12 +3,14 @@ import {
   UnauthorizedException,
   Inject,
   Logger,
+  ConflictException,
+
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
-import { envs } from 'config';
+import { envs, logError } from 'config';
 
 import {
   ValidationException,
@@ -34,20 +36,16 @@ export class AuthService {
     const errors: Record<string, string[]> = {};
 
     if (!registerDto.name) {
-      errors.name = ['Field name is required'];
+      throw new ConflictException('The name field is required');
     }
     if (!registerDto.email) {
-      errors.email = ['Field email is required'];
+      throw new ConflictException('The email field is required');
     }
     if (!registerDto.password) {
-      errors.password = ['Field password is required'];
+      throw new ConflictException('The password field is required');
     }
     if (!registerDto.role) {
-      errors.role = ['Field role is required'];
-    }
-
-    if (Object.keys(errors).length > 0) {
-      throw new ValidationException('Validation failed', errors);
+      throw new ConflictException('The role field is required');
     }
 
     const { password } = registerDto;
@@ -85,7 +83,7 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      this.logger.error('Error creating user in user-ms:', error);
+      logError(this.logger, 'Error creating user in user-ms', error);
 
       if (
         error?.message?.includes('already exists') ||
@@ -129,7 +127,7 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      this.logger.error('Error creating client in user-ms:', error);
+      logError(this.logger, 'Error creating client in user-ms', error);
 
       if (
         error?.message?.includes('already exists') ||
@@ -163,11 +161,7 @@ export class AuthService {
             .toPromise();
           userType = 'client';
         } catch (error) {
-          this.logger.error(
-            `Error finding client by email: ${error.message}`,
-            error.stack,
-          );
-          // Cliente no encontrado, continuar con error genérico
+          logError(this.logger, 'Client lookup by email failed (login fallback)', error);
         }
       }
 
@@ -181,9 +175,6 @@ export class AuthService {
         if (!ok) {
           throw new UnauthorizedException('Invalid credentials');
         }
-      } else {
-        // Client without password - allow login (for cases where password is not required)
-        this.logger.log('Client without password, allowing login');
       }
 
       const tokens = await this.generateTokens({
@@ -192,7 +183,7 @@ export class AuthService {
         name: userData.name,
       });
 
-      this.logger.log(`Successful login for ${userType}:`, {
+      this.logger.debug(`Successful login for ${userType}`, {
         id: userData.id,
         email: userData.email || userData.name,
       });
@@ -209,7 +200,7 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      this.logger.error('Error during login:', error);
+      logError(this.logger, 'Error during login', error);
       if (error instanceof UnauthorizedException) {
         throw error;
       }
@@ -237,11 +228,7 @@ export class AuthService {
             .send('findClientById', userId)
             .toPromise();
         } catch (error) {
-          this.logger.error(
-            `Error finding client by id: ${error.message}`,
-            error.stack,
-          );
-          // Cliente no encontrado, continuar con error genérico
+          logError(this.logger, 'Client lookup by id failed (refreshToken fallback)', error);
         }
       }
 
@@ -257,10 +244,7 @@ export class AuthService {
       const accessToken = this.jwtService.sign(payload);
       return { accessToken };
     } catch (error) {
-      this.logger.error('Error refreshing token:', error);
-      if (error instanceof EntityNotFoundException) {
-        throw error;
-      }
+      logError(this.logger, 'Error refreshing token', error);
       throw new UnauthorizedException('Error renewing token');
     }
   }
@@ -308,11 +292,7 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
-          this.logger.error(
-            `Error finding client by id in validate: ${error.message}`,
-            error.stack,
-          );
-          // Cliente no encontrado, continuar con error genérico
+          logError(this.logger, 'Client lookup by id failed (validateUser)', error);
         }
       }
 
@@ -327,7 +307,7 @@ export class AuthService {
         updatedAt: userData.updated_at,
       };
     } catch (error) {
-      this.logger.error('Error validating user:', error);
+      logError(this.logger, 'Error validating user', error);
       return null;
     }
   }
@@ -358,11 +338,7 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
-          this.logger.error(
-            `Error finding client by id in verifyToken: ${error.message}`,
-            error.stack,
-          );
-          // Cliente no encontrado, continuar con error genérico
+          logError(this.logger, 'Client lookup by id failed (validateToken)', error);
         }
       }
 
