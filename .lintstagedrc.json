@@ -5,6 +5,9 @@
   ],
   "*.{json,md}": [
     "prettier --write"
+  ],
+  ".commitlintrc.json": [
+    "prettier --write"
   ]
 }
 
