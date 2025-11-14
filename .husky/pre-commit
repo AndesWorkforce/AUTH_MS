@@ -5,3 +5,4 @@ pnpm lint-staged || exit 1
 
 pnpm run build || exit 1
 
+pnpm test:integration || exit 1
