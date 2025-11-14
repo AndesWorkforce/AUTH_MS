@@ -4,7 +4,6 @@ import {
   Inject,
   Logger,
   ConflictException,
-
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
@@ -33,8 +32,6 @@ export class AuthService {
   ) {}
 
   async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
-    const errors: Record<string, string[]> = {};
-
     if (!registerDto.name) {
       throw new ConflictException('The name field is required');
     }
@@ -161,7 +158,11 @@ export class AuthService {
             .toPromise();
           userType = 'client';
         } catch (error) {
-          logError(this.logger, 'Client lookup by email failed (login fallback)', error);
+          logError(
+            this.logger,
+            'Client lookup by email failed (login fallback)',
+            error,
+          );
         }
       }
 
@@ -228,7 +229,11 @@ export class AuthService {
             .send('findClientById', userId)
             .toPromise();
         } catch (error) {
-          logError(this.logger, 'Client lookup by id failed (refreshToken fallback)', error);
+          logError(
+            this.logger,
+            'Client lookup by id failed (refreshToken fallback)',
+            error,
+          );
         }
       }
 
@@ -292,7 +297,11 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
-          logError(this.logger, 'Client lookup by id failed (validateUser)', error);
+          logError(
+            this.logger,
+            'Client lookup by id failed (validateUser)',
+            error,
+          );
         }
       }
 
@@ -338,7 +347,11 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
-          logError(this.logger, 'Client lookup by id failed (validateToken)', error);
+          logError(
+            this.logger,
+            'Client lookup by id failed (validateToken)',
+            error,
+          );
         }
       }
 
