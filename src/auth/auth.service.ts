@@ -1,21 +1,12 @@
-import {
-  Injectable,
-  UnauthorizedException,
-  Inject,
-  Logger,
-  ConflictException,
-} from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ClientProxy } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
-import { envs, logError } from 'config';
+import { envs } from 'config';
 
-import {
-  ValidationException,
-  DuplicateEntityException,
-  EntityNotFoundException,
-} from '../common';
+import {} from // Excepciones personalizadas eliminadas temporalmente
+'../common';
 import { LoginDto, RefreshTokenDto } from './dto/login-auth.dto';
 import { RegisterClientDto } from './dto/register-client.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
@@ -32,35 +23,68 @@ export class AuthService {
   ) {}
 
   async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
-    if (!registerDto.name) {
-      throw new ConflictException('The name field is required');
-    }
-    if (!registerDto.email) {
-      throw new ConflictException('The email field is required');
-    }
-    if (!registerDto.password) {
-      throw new ConflictException('The password field is required');
-    }
-    if (!registerDto.role) {
-      throw new ConflictException('The role field is required');
-    }
-
-    const { password } = registerDto;
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Preparar el payload completo ANTES de enviarlo
-    const userPayload = {
-      name: registerDto.name,
-      email: registerDto.email,
-      password: hashedPassword,
-      role: registerDto.role,
-    };
-
     try {
-      const createdUser = await this.userClient
-        .send('createUser', userPayload)
-        .toPromise();
+      if (!registerDto.name) {
+        throw new RpcException({
+          status: 409,
+          message: 'The name field is required',
+          custom: 'Missing name',
+        });
+      }
+      if (!registerDto.email) {
+        throw new RpcException({
+          status: 409,
+          message: 'The email field is required',
+          custom: 'Missing email',
+        });
+      }
+      if (!registerDto.password) {
+        throw new RpcException({
+          status: 409,
+          message: 'The password field is required',
+          custom: 'Missing password',
+        });
+      }
+      if (!registerDto.role) {
+        throw new RpcException({
+          status: 409,
+          message: 'The role field is required',
+          custom: 'Missing role',
+        });
+      }
+
+      const { password } = registerDto;
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const userPayload = {
+        name: registerDto.name,
+        email: registerDto.email,
+        password: hashedPassword,
+        role: registerDto.role,
+      };
+
+      let createdUser;
+      try {
+        createdUser = await this.userClient
+          .send('createUser', userPayload)
+          .toPromise();
+      } catch (error) {
+        this.logger.error('Error creating user in user-ms', error);
+        if (
+          error?.message?.includes('already exists') ||
+          error?.message?.includes('duplicate')
+        ) {
+          throw new RpcException({
+            status: 409,
+            message: 'User already exists',
+            custom: 'Duplicate email',
+          });
+        }
+        throw new RpcException({
+          status: 500,
+          message: 'Error creating user',
+          custom: error.message,
+        });
+      }
 
       const tokens = await this.generateTokens({
         sub: createdUser.id,
@@ -80,31 +104,48 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      logError(this.logger, 'Error creating user in user-ms', error);
-
-      if (
-        error?.message?.includes('already exists') ||
-        error?.message?.includes('duplicate')
-      ) {
-        throw new DuplicateEntityException('User', 'email', registerDto.email);
+      this.logger.error('Error during registerUser', error);
+      if (error instanceof RpcException) {
+        throw error;
       }
-
-      throw new ValidationException(
-        `Error creating user: ${error.message}. Please try again.`,
-      );
+      throw new RpcException({
+        status: 500,
+        message: 'Internal error registering user',
+        custom: error.message,
+      });
     }
   }
 
   async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
     try {
-      const createdClient = await this.userClient
-        .send('createClient', {
-          name: registerDto.name,
-          description: registerDto.description,
-          email: registerDto.email,
-          password: registerDto.password,
-        })
-        .toPromise();
+      let createdClient;
+      try {
+        createdClient = await this.userClient
+          .send('createClient', {
+            name: registerDto.name,
+            description: registerDto.description,
+            email: registerDto.email,
+            password: registerDto.password,
+          })
+          .toPromise();
+      } catch (error) {
+        this.logger.error('Error creating client in user-ms', error);
+        if (
+          error?.message?.includes('already exists') ||
+          error?.message?.includes('duplicate')
+        ) {
+          throw new RpcException({
+            status: 409,
+            message: 'Client already exists',
+            custom: 'Duplicate client',
+          });
+        }
+        throw new RpcException({
+          status: 500,
+          message: 'Error creating client',
+          custom: error.message,
+        });
+      }
 
       const tokens = await this.generateTokens({
         sub: createdClient.id,
@@ -124,18 +165,15 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      logError(this.logger, 'Error creating client in user-ms', error);
-
-      if (
-        error?.message?.includes('already exists') ||
-        error?.message?.includes('duplicate')
-      ) {
-        throw new DuplicateEntityException('Client', 'name', registerDto.name);
+      this.logger.error('Error during registerClient', error);
+      if (error instanceof RpcException) {
+        throw error;
       }
-
-      throw new ValidationException(
-        `Error creating client: ${error.message}. Please try again.`,
-      );
+      throw new RpcException({
+        status: 500,
+        message: 'Internal error registering client',
+        custom: error.message,
+      });
     }
   }
 
@@ -143,45 +181,31 @@ export class AuthService {
     const { email, password } = loginDto;
 
     try {
-      // 1. Buscar primero en usuarios
-      let userData = await this.userClient
-        .send('findUserByEmail', email)
-        .toPromise();
-
-      let userType = 'user';
-
-      // 2. Si no existe, buscar en clientes
-      if (!userData) {
-        try {
-          userData = await this.userClient
-            .send('findClientByEmail', email)
-            .toPromise();
-          userType = 'client';
-        } catch (error) {
-          logError(
-            this.logger,
-            'Client lookup by email failed (login fallback)',
-            error,
-          );
-        }
-      }
+      const { userData, userType } = await this.findUserByEmail(email);
 
       if (!userData) {
-        throw new UnauthorizedException('Invalid credentials');
+        throw new RpcException({
+          status: 418,
+          message: 'Invalid credentials',
+          custom: 'User not found',
+        });
       }
 
-      // 3. Verificar contraseña (solo si existe)
       if (userData.password) {
         const ok = await bcrypt.compare(password, userData.password);
         if (!ok) {
-          throw new UnauthorizedException('Invalid credentials');
+          throw new RpcException({
+            status: 418,
+            message: 'Invalid credentials',
+            custom: 'Invalid password',
+          });
         }
       }
 
       const tokens = await this.generateTokens({
         sub: userData.id,
-        email: userData.email || userData.name,
-        name: userData.name,
+        email: (userData.email ?? userData.name ?? '') as string,
+        name: (userData.name ?? userData.email ?? '') as string,
       });
 
       this.logger.debug(`Successful login for ${userType}`, {
@@ -192,45 +216,92 @@ export class AuthService {
       return {
         user: {
           id: userData.id,
-          email: userData.email || userData.name,
-          name: userData.name,
+          email: (userData.email ?? userData.name ?? '') as string,
+          name: (userData.name ?? userData.email ?? '') as string,
           isActive: true,
-          createdAt: userData.created_at,
-          updatedAt: userData.updated_at,
+          createdAt: userData.created_at as unknown as Date,
+          updatedAt: userData.updated_at as unknown as Date,
         },
         ...tokens,
       };
     } catch (error) {
-      logError(this.logger, 'Error during login', error);
-      if (error instanceof UnauthorizedException) {
+      this.logger.error('Error during login', error);
+
+      if (error instanceof RpcException) {
         throw error;
       }
-      throw new UnauthorizedException('Error authenticating user');
+
+      throw new RpcException({
+        status: error.status || 500,
+        message: error.message || 'Internal error during login',
+        custom: error.custom || error.message,
+      });
     }
+  }
+
+  private async findUserByEmail(
+    email: string,
+  ): Promise<{ userData: any; userType: 'user' | 'client' }> {
+    let userData: any = null;
+    let userType: 'user' | 'client' = 'user';
+
+    try {
+      userData = await this.userClient
+        .send('findUserByEmail', email)
+        .toPromise();
+    } catch (err) {
+      // If primary lookup fails unexpectedly, log and continue to fallback
+      this.logger.error('User lookup by email failed', err);
+    }
+
+    if (!userData) {
+      try {
+        userData = await this.userClient
+          .send('findClientByEmail', email)
+          .toPromise();
+        userType = 'client';
+      } catch (err) {
+        // Fallback failure is non-fatal for login flow: log and return null
+        this.logger.error(
+          'Client lookup by email failed (login fallback)',
+          err,
+        );
+      }
+    }
+
+    return { userData, userType };
   }
 
   async refreshToken(
     refreshTokenDto: RefreshTokenDto,
   ): Promise<{ accessToken: string }> {
-    const { refreshToken } = refreshTokenDto;
-    const userId = this.refreshTokens.get(refreshToken);
-    if (!userId) throw new UnauthorizedException('Invalid refresh token');
-
     try {
-      // 1. Buscar primero en usuarios
-      let userData = await this.userClient
-        .send('findUserById', userId)
-        .toPromise();
+      const { refreshToken } = refreshTokenDto;
+      const userId = this.refreshTokens.get(refreshToken);
+      if (!userId) {
+        throw new RpcException({
+          status: 401,
+          message: 'Invalid refresh token',
+          custom: 'Refresh token not found',
+        });
+      }
 
-      // 2. Si no existe, buscar en clientes
+      let userData;
+      try {
+        userData = await this.userClient
+          .send('findUserById', userId)
+          .toPromise();
+      } catch (error) {
+        this.logger.error('User lookup by id failed (refreshToken)', error);
+      }
+
       if (!userData) {
         try {
           userData = await this.userClient
             .send('findClientById', userId)
             .toPromise();
         } catch (error) {
-          logError(
-            this.logger,
+          this.logger.error(
             'Client lookup by id failed (refreshToken fallback)',
             error,
           );
@@ -238,7 +309,11 @@ export class AuthService {
       }
 
       if (!userData) {
-        throw new EntityNotFoundException('User', userId);
+        throw new RpcException({
+          status: 404,
+          message: 'User not found',
+          custom: 'User not found for refresh token',
+        });
       }
 
       const payload: UserPayload = {
@@ -249,18 +324,41 @@ export class AuthService {
       const accessToken = this.jwtService.sign(payload);
       return { accessToken };
     } catch (error) {
-      logError(this.logger, 'Error refreshing token', error);
-      throw new UnauthorizedException('Error renewing token');
+      this.logger.error('Error during refreshToken', error);
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      throw new RpcException({
+        status: 500,
+        message: 'Internal error refreshing token',
+        custom: error.message,
+      });
     }
   }
 
   logout(logoutDto: RefreshTokenDto): Promise<{ message: string }> {
-    const { refreshToken } = logoutDto;
-
-    // Eliminar refresh token
-    this.refreshTokens.delete(refreshToken);
-
-    return Promise.resolve({ message: 'Logout successful' });
+    try {
+      const { refreshToken } = logoutDto;
+      if (!refreshToken) {
+        throw new RpcException({
+          status: 400,
+          message: 'Refresh token is required',
+          custom: 'Missing refresh token',
+        });
+      }
+      this.refreshTokens.delete(refreshToken);
+      return Promise.resolve({ message: 'Logout successful' });
+    } catch (error) {
+      this.logger.error('Error during logout', error);
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      throw new RpcException({
+        status: 500,
+        message: 'Internal error during logout',
+        custom: error.message,
+      });
+    }
   }
 
   private generateTokens(
@@ -297,11 +395,7 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
-          logError(
-            this.logger,
-            'Client lookup by id failed (validateUser)',
-            error,
-          );
+          this.logger.error('Client lookup by id failed (validateUser)', error);
         }
       }
 
@@ -316,7 +410,7 @@ export class AuthService {
         updatedAt: userData.updated_at,
       };
     } catch (error) {
-      logError(this.logger, 'Error validating user', error);
+      this.logger.error('Error validating user', error);
       return null;
     }
   }
@@ -347,8 +441,7 @@ export class AuthService {
             .send('findClientById', payload.sub)
             .toPromise();
         } catch (error) {
-          logError(
-            this.logger,
+          this.logger.error(
             'Client lookup by id failed (validateToken)',
             error,
           );

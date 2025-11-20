@@ -101,6 +101,8 @@ module.exports = {
     'no-console': ['warn', { allow: ['warn', 'error'] }],
     'prefer-const': 'error',
     'no-var': 'error',
+
+    'prettier/prettier': 'off'
   },
   settings: {
     'import/resolver': {
