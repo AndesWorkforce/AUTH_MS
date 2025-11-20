@@ -97,13 +97,25 @@ export class AuthService {
 
   async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
     try {
+      // Hash password if provided
+      const clientData: {
+        name: string;
+        description?: string;
+        email?: string;
+        password?: string;
+      } = {
+        name: registerDto.name,
+        description: registerDto.description,
+        email: registerDto.email,
+      };
+
+      if (registerDto.password) {
+        const hashedPassword = await bcrypt.hash(registerDto.password, 10);
+        clientData.password = hashedPassword;
+      }
+
       const createdClient = await this.userClient
-        .send('createClient', {
-          name: registerDto.name,
-          description: registerDto.description,
-          email: registerDto.email,
-          password: registerDto.password,
-        })
+        .send('createClient', clientData)
         .toPromise();
 
       const tokens = await this.generateTokens({
@@ -126,15 +138,24 @@ export class AuthService {
     } catch (error) {
       logError(this.logger, 'Error creating client in user-ms', error);
 
+      // Handle duplicate entity exception from USER_MS
+      if (error?.statusCode === 409 || error?.status === 409) {
+        // This is a DuplicateEntityException from USER_MS
+        throw error; // Re-throw the exception as-is
+      }
+
       if (
         error?.message?.includes('already exists') ||
-        error?.message?.includes('duplicate')
+        error?.message?.includes('duplicate') ||
+        error?.code === 'P2002'
       ) {
-        throw new DuplicateEntityException('Client', 'name', registerDto.name);
+        const field = error?.field || 'name';
+        const value = error?.value || registerDto.name || registerDto.email;
+        throw new DuplicateEntityException('Client', field, value);
       }
 
       throw new ValidationException(
-        `Error creating client: ${error.message}. Please try again.`,
+        `Error creating client: ${error.message || 'Unknown error'}. Please try again.`,
       );
     }
   }
@@ -144,11 +165,24 @@ export class AuthService {
 
     try {
       // 1. Buscar primero en usuarios
-      let userData = await this.userClient
-        .send('findUserByEmail', email)
-        .toPromise();
+      let userData: {
+        id: string;
+        email?: string;
+        name: string;
+        password?: string;
+        role?: string;
+        created_at: Date;
+        updated_at: Date;
+      } | null = null;
 
-      let userType = 'user';
+      try {
+        userData = await this.userClient
+          .send('findUserByEmail', email)
+          .toPromise();
+      } catch {
+        // This is expected when the email doesn't belong to a user
+        // We'll check clients next, so this is not an error
+      }
 
       // 2. Si no existe, buscar en clientes
       if (!userData) {
@@ -156,13 +190,8 @@ export class AuthService {
           userData = await this.userClient
             .send('findClientByEmail', email)
             .toPromise();
-          userType = 'client';
-        } catch (error) {
-          logError(
-            this.logger,
-            'Client lookup by email failed (login fallback)',
-            error,
-          );
+        } catch {
+          // This is expected when the email doesn't belong to a client either
         }
       }
 
@@ -170,23 +199,24 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
-      // 3. Verificar contraseña (solo si existe)
-      if (userData.password) {
-        const ok = await bcrypt.compare(password, userData.password);
-        if (!ok) {
-          throw new UnauthorizedException('Invalid credentials');
-        }
+      // 3. Verificar contraseña - todos (usuarios y clientes) deben tener contraseña
+      if (!password) {
+        throw new UnauthorizedException('Password is required');
+      }
+
+      if (!userData.password) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      const ok = await bcrypt.compare(password, userData.password);
+      if (!ok) {
+        throw new UnauthorizedException('Invalid credentials');
       }
 
       const tokens = await this.generateTokens({
         sub: userData.id,
         email: userData.email || userData.name,
         name: userData.name,
-      });
-
-      this.logger.debug(`Successful login for ${userType}`, {
-        id: userData.id,
-        email: userData.email || userData.name,
       });
 
       return {
@@ -331,14 +361,46 @@ export class AuthService {
       }
 
       // Verificar y decodificar el JWT
-      const payload = this.jwtService.verify(token, {
-        secret: envs.jwtSecretPassword,
-      }) as UserPayload;
+      let payload: UserPayload;
+      try {
+        payload = this.jwtService.verify(token, {
+          secret: envs.jwtSecretPassword,
+        }) as UserPayload;
+      } catch {
+        return {
+          isValid: false,
+          error: 'Invalid or expired token',
+        };
+      }
 
       // 1. Buscar primero en usuarios
-      let userData = await this.userClient
-        .send('findUserById', payload.sub)
-        .toPromise();
+      let userData: {
+        id: string;
+        email?: string;
+        name: string;
+        role?: string;
+        created_at: Date;
+        updated_at: Date;
+      } | null = null;
+      let userType: 'user' | 'client' = 'user';
+      let role: string | null = null;
+
+      try {
+        userData = await this.userClient
+          .send('findUserById', payload.sub)
+          .toPromise();
+
+        if (userData) {
+          userType = 'user';
+          role = userData.role ?? null;
+        }
+      } catch (error) {
+        logError(
+          this.logger,
+          'User lookup by id failed (validateToken)',
+          error,
+        );
+      }
 
       // 2. Si no existe, buscar en clientes
       if (!userData) {
@@ -346,6 +408,8 @@ export class AuthService {
           userData = await this.userClient
             .send('findClientById', payload.sub)
             .toPromise();
+          userType = 'client';
+          role = null; // Clients don't have roles
         } catch (error) {
           logError(
             this.logger,
@@ -368,10 +432,17 @@ export class AuthService {
         email: userData.email || userData.name,
         name: userData.name,
         isActive: true,
-        createdAt: userData.created_at,
-        updatedAt: userData.updated_at,
+        createdAt: userData.created_at
+          ? new Date(userData.created_at).toISOString()
+          : new Date().toISOString(),
+        updatedAt: userData.updated_at
+          ? new Date(userData.updated_at).toISOString()
+          : new Date().toISOString(),
+        userType,
+        role,
       };
-    } catch {
+    } catch (error) {
+      logError(this.logger, 'Unexpected error in validateToken', error);
       return {
         isValid: false,
         error: 'Invalid or expired token',
