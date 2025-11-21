@@ -23,10 +23,12 @@ jest.mock('config', () => ({
     natsPassword: 'test',
     jwtSecretPassword: 'test-secret',
     devLogsEnabled: false,
+    environment: 'development',
   },
   resolveLogLevels: () => ['error'],
   getLogModeMessage: () => 'test-mode',
   logError: jest.fn(),
+  getMessagePattern: (pattern: string) => pattern,
 }));
 
 type StoredUser = {
