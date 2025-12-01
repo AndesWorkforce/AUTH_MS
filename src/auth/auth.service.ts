@@ -9,7 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ClientProxy } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
-import { envs, logError } from 'config';
+import { envs, getMessagePattern, logError } from 'config';
 
 import {
   ValidationException,
@@ -59,7 +59,7 @@ export class AuthService {
 
     try {
       const createdUser = await this.userClient
-        .send('createUser', userPayload)
+        .send(getMessagePattern('createUser'), userPayload)
         .toPromise();
 
       const tokens = await this.generateTokens({
@@ -115,7 +115,7 @@ export class AuthService {
       }
 
       const createdClient = await this.userClient
-        .send('createClient', clientData)
+        .send(getMessagePattern('createClient'), clientData)
         .toPromise();
 
       const tokens = await this.generateTokens({
@@ -177,7 +177,7 @@ export class AuthService {
 
       try {
         userData = await this.userClient
-          .send('findUserByEmail', email)
+          .send(getMessagePattern('findUserByEmail'), email)
           .toPromise();
       } catch {
         // This is expected when the email doesn't belong to a user
@@ -188,7 +188,7 @@ export class AuthService {
       if (!userData) {
         try {
           userData = await this.userClient
-            .send('findClientByEmail', email)
+            .send(getMessagePattern('findClientByEmail'), email)
             .toPromise();
         } catch {
           // This is expected when the email doesn't belong to a client either
@@ -249,14 +249,14 @@ export class AuthService {
     try {
       // 1. Buscar primero en usuarios
       let userData = await this.userClient
-        .send('findUserById', userId)
+        .send(getMessagePattern('findUserById'), userId)
         .toPromise();
 
       // 2. Si no existe, buscar en clientes
       if (!userData) {
         try {
           userData = await this.userClient
-            .send('findClientById', userId)
+            .send(getMessagePattern('findClientById'), userId)
             .toPromise();
         } catch (error) {
           logError(
@@ -387,7 +387,7 @@ export class AuthService {
 
       try {
         userData = await this.userClient
-          .send('findUserById', payload.sub)
+          .send(getMessagePattern('findUserById'), payload.sub)
           .toPromise();
 
         if (userData) {
