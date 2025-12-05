@@ -277,7 +277,7 @@ export class AuthService {
         try {
           // Nota: findClientById puede no usar getMessagePattern según validateToken
           userData = await this.userClient
-            .send('findClientById', userId)
+            .send(getMessagePattern('findClientById'), userId)
             .toPromise();
         } catch (error) {
           logError(
