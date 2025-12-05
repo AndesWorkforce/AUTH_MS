@@ -74,6 +74,7 @@ describe('AuthModule (integration)', () => {
 
   const mockUserClient = {
     send: (pattern: string, payload: unknown) => {
+      // getMessagePattern devuelve el pattern tal cual en el mock
       switch (pattern) {
         case 'createUser': {
           const data = payload as {
@@ -289,6 +290,15 @@ describe('AuthModule (integration)', () => {
       client.send('auth.login', loginPayload),
     );
 
+    // Verificar que el login devolvió tokens
+    expect(loginResponse).toHaveProperty('accessToken');
+    expect(loginResponse).toHaveProperty('refreshToken');
+    expect(loginResponse.refreshToken).toBeDefined();
+    const originalAccessToken = loginResponse.accessToken;
+
+    // Esperar un poco para asegurar que el nuevo token tenga un timestamp diferente
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
     const refreshPayload: RefreshTokenDto = {
       refreshToken: loginResponse.refreshToken,
     };
@@ -297,8 +307,15 @@ describe('AuthModule (integration)', () => {
       client.send('auth.refresh-token', refreshPayload),
     );
 
+    // Verificar que el refresh devolvió un nuevo accessToken
     expect(refreshResponse).toHaveProperty('accessToken');
-    expect(refreshResponse.accessToken).not.toEqual(loginResponse.accessToken);
+    expect(refreshResponse.accessToken).toBeDefined();
+    expect(typeof refreshResponse.accessToken).toBe('string');
+    expect(refreshResponse.accessToken.length).toBeGreaterThan(0);
+
+    // El nuevo accessToken debe ser diferente del original
+    // (esperamos 1 segundo para asegurar que tenga un timestamp diferente)
+    expect(refreshResponse.accessToken).not.toEqual(originalAccessToken);
   });
 
   it('logs out and invalidates refresh token', async () => {

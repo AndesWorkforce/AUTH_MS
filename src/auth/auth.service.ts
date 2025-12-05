@@ -243,31 +243,55 @@ export class AuthService {
     refreshTokenDto: RefreshTokenDto,
   ): Promise<{ accessToken: string }> {
     const { refreshToken } = refreshTokenDto;
+
+    if (!refreshToken) {
+      this.logger.warn('Refresh token not provided');
+      throw new UnauthorizedException('Refresh token is required');
+    }
+
     const userId = this.refreshTokens.get(refreshToken);
-    if (!userId) throw new UnauthorizedException('Invalid refresh token');
+    if (!userId) {
+      this.logger.warn(
+        `Invalid refresh token: ${refreshToken.substring(0, 10)}...`,
+      );
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
     try {
       // 1. Buscar primero en usuarios
-      let userData = await this.userClient
-        .send(getMessagePattern('findUserById'), userId)
-        .toPromise();
+      let userData: any = null;
+      try {
+        userData = await this.userClient
+          .send(getMessagePattern('findUserById'), userId)
+          .toPromise();
+      } catch (error) {
+        logError(
+          this.logger,
+          `User lookup by id failed (refreshToken) for userId: ${userId}`,
+          error,
+        );
+      }
 
       // 2. Si no existe, buscar en clientes
       if (!userData) {
         try {
+          // Nota: findClientById puede no usar getMessagePattern según validateToken
           userData = await this.userClient
             .send(getMessagePattern('findClientById'), userId)
             .toPromise();
         } catch (error) {
           logError(
             this.logger,
-            'Client lookup by id failed (refreshToken fallback)',
+            `Client lookup by id failed (refreshToken fallback) for userId: ${userId}`,
             error,
           );
         }
       }
 
       if (!userData) {
+        this.logger.error(
+          `User not found for refresh token. userId: ${userId}, refreshToken: ${refreshToken.substring(0, 10)}...`,
+        );
         throw new EntityNotFoundException('User', userId);
       }
 
@@ -277,8 +301,17 @@ export class AuthService {
         name: userData.name,
       };
       const accessToken = this.jwtService.sign(payload);
+      this.logger.debug(
+        `Token refreshed successfully for user: ${userData.id}`,
+      );
       return { accessToken };
     } catch (error) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof EntityNotFoundException
+      ) {
+        throw error;
+      }
       logError(this.logger, 'Error refreshing token', error);
       throw new UnauthorizedException('Error renewing token');
     }
@@ -296,7 +329,7 @@ export class AuthService {
   private generateTokens(
     payload: UserPayload,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
     const refreshToken = this.jwtService.sign(
       { sub: payload.sub },
       { expiresIn: '7d' },
