@@ -3,6 +3,7 @@ export class User {
   email: string;
   password: string;
   name: string;
+  role?: string; // ✅ Agregar campo role
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
