@@ -224,7 +224,7 @@ export class AuthService {
           id: userData.id,
           email: userData.email || userData.name,
           name: userData.name,
-          role: userData.role, // ✅ Agregar el rol a la respuesta
+          role: userData.role,
           isActive: true,
           createdAt: userData.created_at,
           updatedAt: userData.updated_at,
