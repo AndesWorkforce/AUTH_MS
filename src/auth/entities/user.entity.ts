@@ -4,6 +4,7 @@ export class User {
   password: string;
   name: string;
   role?: string;
+  extraRoles?: string[];
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;

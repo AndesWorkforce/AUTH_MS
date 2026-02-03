@@ -171,6 +171,7 @@ export class AuthService {
         name: string;
         password?: string;
         role?: string;
+        extraRoles?: string[];
         created_at: Date;
         updated_at: Date;
       } | null = null;
@@ -219,12 +220,24 @@ export class AuthService {
         name: userData.name,
       });
 
+      this.logger.debug(
+        `Login - User extraRoles: ${JSON.stringify(userData.extraRoles)}, type: ${typeof userData.extraRoles}, isArray: ${Array.isArray(userData.extraRoles)}`,
+      );
+
+      const extraRoles =
+        userData.extraRoles &&
+        Array.isArray(userData.extraRoles) &&
+        userData.extraRoles.length > 0
+          ? userData.extraRoles
+          : undefined;
+
       return {
         user: {
           id: userData.id,
           email: userData.email || userData.name,
           name: userData.name,
           role: userData.role,
+          extraRoles,
           isActive: true,
           createdAt: userData.created_at,
           updatedAt: userData.updated_at,
@@ -413,11 +426,13 @@ export class AuthService {
         email?: string;
         name: string;
         role?: string;
+        extraRoles?: string[];
         created_at: Date;
         updated_at: Date;
       } | null = null;
       let userType: 'user' | 'client' = 'user';
       let role: string | null = null;
+      let extraRoles: string[] | null = null;
 
       try {
         userData = await this.userClient
@@ -427,6 +442,7 @@ export class AuthService {
         if (userData) {
           userType = 'user';
           role = userData.role ?? null;
+          extraRoles = userData.extraRoles ?? null;
         }
       } catch (error) {
         logError(
@@ -474,6 +490,7 @@ export class AuthService {
           : new Date().toISOString(),
         userType,
         role,
+        extraRoles,
       };
     } catch (error) {
       logError(this.logger, 'Unexpected error in validateToken', error);
