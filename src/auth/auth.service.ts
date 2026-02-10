@@ -66,6 +66,7 @@ export class AuthService {
         sub: createdUser.id,
         email: createdUser.email,
         name: registerDto.name,
+        userType: 'user',
       });
 
       return {
@@ -73,6 +74,7 @@ export class AuthService {
           id: createdUser.id,
           email: createdUser.email,
           name: registerDto.name,
+          userType: 'user',
           isActive: true,
           createdAt: createdUser.created_at,
           updatedAt: createdUser.updated_at,
@@ -122,6 +124,7 @@ export class AuthService {
         sub: createdClient.id,
         email: createdClient.email || createdClient.name,
         name: createdClient.name,
+        userType: 'client',
       });
 
       return {
@@ -129,6 +132,7 @@ export class AuthService {
           id: createdClient.id,
           email: createdClient.email || createdClient.name,
           name: createdClient.name,
+          userType: 'client',
           isActive: true,
           createdAt: createdClient.created_at,
           updatedAt: createdClient.updated_at,
@@ -166,6 +170,7 @@ export class AuthService {
     try {
       // 1. Buscar primero en usuarios
       let userData: {
+        userType: 'user' | 'client';
         id: string;
         email?: string;
         name: string;
@@ -218,6 +223,7 @@ export class AuthService {
         sub: userData.id,
         email: userData.email || userData.name,
         name: userData.name,
+        userType: userData.userType,
       });
 
       this.logger.debug(
@@ -238,6 +244,7 @@ export class AuthService {
           name: userData.name,
           role: userData.role,
           extraRoles,
+          userType: userData.userType,
           isActive: true,
           createdAt: userData.created_at,
           updatedAt: userData.updated_at,
@@ -313,6 +320,7 @@ export class AuthService {
         sub: userData.id,
         email: userData.email || userData.name,
         name: userData.name,
+        userType: userData.userType,
       };
       const accessToken = this.jwtService.sign(payload);
       this.logger.debug(
@@ -427,6 +435,7 @@ export class AuthService {
         name: string;
         role?: string;
         extraRoles?: string[];
+        userType: 'user' | 'client';
         created_at: Date;
         updated_at: Date;
       } | null = null;
@@ -455,11 +464,12 @@ export class AuthService {
       // 2. Si no existe, buscar en clientes
       if (!userData) {
         try {
+          // Usar el mismo message pattern que USER_MS expone para findClientById
           userData = await this.userClient
-            .send('findClientById', payload.sub)
+            .send(getMessagePattern('findClientById'), payload.sub)
             .toPromise();
           userType = 'client';
-          role = null; // Clients don't have roles
+          role = null; // Clients don't tienen roles
         } catch (error) {
           logError(
             this.logger,
