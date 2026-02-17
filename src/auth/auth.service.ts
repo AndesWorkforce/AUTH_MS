@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ClientProxy } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
 import { envs, getMessagePattern, logError } from 'config';
@@ -168,56 +168,15 @@ export class AuthService {
     const { email, password } = loginDto;
 
     try {
-      // 1. Buscar primero en usuarios
-      let userData: {
-        userType: 'user' | 'client';
-        id: string;
-        email?: string;
-        name: string;
-        password?: string;
-        role?: string;
-        extraRoles?: string[];
-        created_at: Date;
-        updated_at: Date;
-      } | null = null;
-
-      try {
-        userData = await this.userClient
-          .send(getMessagePattern('findUserByEmail'), email)
-          .toPromise();
-      } catch {
-        // This is expected when the email doesn't belong to a user
-        // We'll check clients next, so this is not an error
-      }
-
-      // 2. Si no existe, buscar en clientes
+      const userData = await this.findUserOrClientByEmail(email);
       if (!userData) {
-        try {
-          userData = await this.userClient
-            .send(getMessagePattern('findClientByEmail'), email)
-            .toPromise();
-        } catch {
-          // This is expected when the email doesn't belong to a client either
-        }
+        throw new RpcException({
+          status: 'error',
+          message: 'Invalid credentials',
+        });
       }
 
-      if (!userData) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
-
-      // 3. Verificar contraseña - todos (usuarios y clientes) deben tener contraseña
-      if (!password) {
-        throw new UnauthorizedException('Password is required');
-      }
-
-      if (!userData.password) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
-
-      const ok = await bcrypt.compare(password, userData.password);
-      if (!ok) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
+      await this.validatePassword(password, userData.password);
 
       const tokens = await this.generateTokens({
         sub: userData.id,
@@ -226,16 +185,7 @@ export class AuthService {
         userType: userData.userType,
       });
 
-      this.logger.debug(
-        `Login - User extraRoles: ${JSON.stringify(userData.extraRoles)}, type: ${typeof userData.extraRoles}, isArray: ${Array.isArray(userData.extraRoles)}`,
-      );
-
-      const extraRoles =
-        userData.extraRoles &&
-        Array.isArray(userData.extraRoles) &&
-        userData.extraRoles.length > 0
-          ? userData.extraRoles
-          : undefined;
+      const extraRoles = this.normalizeExtraRoles(userData.extraRoles);
 
       return {
         user: {
@@ -253,11 +203,88 @@ export class AuthService {
       };
     } catch (error) {
       logError(this.logger, 'Error during login', error);
-      if (error instanceof UnauthorizedException) {
+      if (error instanceof RpcException) {
         throw error;
       }
-      throw new UnauthorizedException('Error authenticating user');
+      throw new RpcException({
+        status: 'error',
+        message: 'Error authenticating user',
+      });
     }
+  }
+
+  private async findUserOrClientByEmail(email: string): Promise<{
+    userType: 'user' | 'client';
+    id: string;
+    email?: string;
+    name: string;
+    password?: string;
+    role?: string;
+    extraRoles?: string[];
+    created_at: Date;
+    updated_at: Date;
+  } | null> {
+    try {
+      const foundUser = await this.userClient
+        .send(getMessagePattern('findUserByEmail'), email)
+        .toPromise();
+      if (foundUser) {
+        return {
+          ...foundUser,
+          userType: 'user',
+        };
+      }
+    } catch {}
+
+    try {
+      const foundClient = await this.userClient
+        .send(getMessagePattern('findClientByEmail'), email)
+        .toPromise();
+      if (foundClient) {
+        return {
+          ...foundClient,
+          userType: 'client',
+        };
+      }
+    } catch {}
+
+    return null;
+  }
+
+  private async validatePassword(
+    providedPassword: string | undefined,
+    storedPassword: string | undefined,
+  ): Promise<void> {
+    if (!providedPassword) {
+      throw new RpcException({
+        status: 'error',
+        message: 'Invalid credentials',
+      });
+    }
+
+    if (!storedPassword) {
+      throw new RpcException({
+        status: 'error',
+        message: 'Invalid credentials',
+      });
+    }
+
+    const ok = await bcrypt.compare(providedPassword, storedPassword);
+    if (!ok) {
+      throw new RpcException({
+        status: 'error',
+        message: 'Invalid credentials',
+      });
+    }
+  }
+
+  private normalizeExtraRoles(
+    extraRoles: string[] | undefined,
+  ): string[] | undefined {
+    if (extraRoles && Array.isArray(extraRoles) && extraRoles.length > 0) {
+      return extraRoles;
+    }
+    return undefined;
   }
 
   async refreshToken(
@@ -280,11 +307,22 @@ export class AuthService {
 
     try {
       // 1. Buscar primero en usuarios
-      let userData: any = null;
+      let userData: {
+        id: string;
+        email?: string;
+        name: string;
+        created_at: Date;
+        updated_at: Date;
+      } | null = null;
+      let resolvedUserType: 'user' | 'client' = 'user';
       try {
-        userData = await this.userClient
+        const foundUser = await this.userClient
           .send(getMessagePattern('findUserById'), userId)
           .toPromise();
+        if (foundUser) {
+          userData = foundUser;
+          resolvedUserType = 'user';
+        }
       } catch (error) {
         logError(
           this.logger,
@@ -297,9 +335,13 @@ export class AuthService {
       if (!userData) {
         try {
           // Nota: findClientById puede no usar getMessagePattern según validateToken
-          userData = await this.userClient
+          const foundClient = await this.userClient
             .send(getMessagePattern('findClientById'), userId)
             .toPromise();
+          if (foundClient) {
+            userData = foundClient;
+            resolvedUserType = 'client';
+          }
         } catch (error) {
           logError(
             this.logger,
@@ -320,7 +362,7 @@ export class AuthService {
         sub: userData.id,
         email: userData.email || userData.name,
         name: userData.name,
-        userType: userData.userType,
+        userType: resolvedUserType,
       };
       const accessToken = this.jwtService.sign(payload);
       this.logger.debug(
