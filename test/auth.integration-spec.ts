@@ -276,7 +276,7 @@ describe('AuthModule (integration)', () => {
       })
       .catch((error) => {
         expect(error.status).toBe('error');
-        expect(error.message).toBe('Internal server error');
+        expect(error.message).toBe('Invalid credentials');
       });
   });
 
