@@ -15,7 +15,7 @@ export interface UserPayload {
   sub: string;
   email: string;
   name: string;
-  userType: 'user' | 'client';
+  userType: 'user' | 'client' | 'agent';
 }
 
 export interface AuthResponse {

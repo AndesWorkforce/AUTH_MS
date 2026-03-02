@@ -451,105 +451,171 @@ export class AuthService {
   async validateToken(token: string) {
     try {
       if (!token) {
-        return {
-          isValid: false,
-          error: 'Token not provided',
-        };
+        return this.buildInvalidTokenResponse('Token not provided');
       }
 
-      // Verificar y decodificar el JWT
-      let payload: UserPayload;
-      try {
-        payload = this.jwtService.verify(token, {
-          secret: envs.jwtSecretPassword,
-        }) as UserPayload;
-      } catch {
-        return {
-          isValid: false,
-          error: 'Invalid or expired token',
-        };
+      const payload = this.verifyJwtToken(token);
+      if (!payload) {
+        return this.buildInvalidTokenResponse('Invalid or expired token');
       }
 
-      // 1. Buscar primero en usuarios
-      let userData: {
-        id: string;
-        email?: string;
-        name: string;
-        role?: string;
-        extraRoles?: string[];
-        userType: 'user' | 'client';
-        created_at: Date;
-        updated_at: Date;
-      } | null = null;
-      let userType: 'user' | 'client' = 'user';
-      let role: string | null = null;
-      let extraRoles: string[] | null = null;
+      const agentResult = this.buildAgentTokenResponseIfApplicable(payload);
+      if (agentResult) {
+        return agentResult;
+      }
 
+      const { userData, userType, role, extraRoles } =
+        await this.findUserOrClientByIdForValidation(payload.sub);
+
+      if (!userData) {
+        return this.buildInvalidTokenResponse('User not found');
+      }
+
+      return this.buildValidTokenResponse(userData, userType, role, extraRoles);
+    } catch (error) {
+      logError(this.logger, 'Unexpected error in validateToken', error);
+      return this.buildInvalidTokenResponse('Invalid or expired token');
+    }
+  }
+
+  private verifyJwtToken(
+    token: string,
+  ): (UserPayload & { userType?: string }) | null {
+    try {
+      return this.jwtService.verify(token, {
+        secret: envs.jwtSecretPassword,
+      }) as UserPayload & { userType?: string };
+    } catch {
+      return null;
+    }
+  }
+
+  private buildAgentTokenResponseIfApplicable(
+    payload: UserPayload & { userType?: string },
+  ) {
+    if (payload.userType !== 'agent' && payload.sub !== 'agent-bootstrap') {
+      return null;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    return {
+      isValid: true,
+      userId: payload.sub,
+      email: payload.email ?? 'agent@system',
+      name: payload.name ?? 'Agent Bootstrap',
+      isActive: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      userType: 'agent' as const,
+      role: null,
+      extraRoles: null,
+    };
+  }
+
+  private async findUserOrClientByIdForValidation(id: string): Promise<{
+    userData: {
+      id: string;
+      email?: string;
+      name: string;
+      role?: string;
+      extraRoles?: string[];
+      userType: 'user' | 'client';
+      created_at: Date;
+      updated_at: Date;
+    } | null;
+    userType: 'user' | 'client';
+    role: string | null;
+    extraRoles: string[] | null;
+  }> {
+    let userData: {
+      id: string;
+      email?: string;
+      name: string;
+      role?: string;
+      extraRoles?: string[];
+      userType: 'user' | 'client';
+      created_at: Date;
+      updated_at: Date;
+    } | null = null;
+    let resolvedUserType: 'user' | 'client' = 'user';
+    let role: string | null = null;
+    let extraRoles: string[] | null = null;
+
+    try {
+      userData = await this.userClient
+        .send(getMessagePattern('findUserById'), id)
+        .toPromise();
+
+      if (userData) {
+        resolvedUserType = 'user';
+        role = userData.role ?? null;
+        extraRoles = userData.extraRoles ?? null;
+      }
+    } catch (error) {
+      logError(this.logger, 'User lookup by id failed (validateToken)', error);
+    }
+
+    if (!userData) {
       try {
-        userData = await this.userClient
-          .send(getMessagePattern('findUserById'), payload.sub)
+        const clientData = await this.userClient
+          .send(getMessagePattern('findClientById'), id)
           .toPromise();
 
-        if (userData) {
-          userType = 'user';
-          role = userData.role ?? null;
-          extraRoles = userData.extraRoles ?? null;
+        if (clientData) {
+          userData = clientData;
+          resolvedUserType = 'client';
+          role = null;
         }
       } catch (error) {
         logError(
           this.logger,
-          'User lookup by id failed (validateToken)',
+          'Client lookup by id failed (validateToken)',
           error,
         );
       }
-
-      // 2. Si no existe, buscar en clientes
-      if (!userData) {
-        try {
-          // Usar el mismo message pattern que USER_MS expone para findClientById
-          userData = await this.userClient
-            .send(getMessagePattern('findClientById'), payload.sub)
-            .toPromise();
-          userType = 'client';
-          role = null; // Clients don't tienen roles
-        } catch (error) {
-          logError(
-            this.logger,
-            'Client lookup by id failed (validateToken)',
-            error,
-          );
-        }
-      }
-
-      if (!userData) {
-        return {
-          isValid: false,
-          error: 'User not found',
-        };
-      }
-
-      return {
-        isValid: true,
-        userId: userData.id,
-        email: userData.email || userData.name,
-        name: userData.name,
-        isActive: true,
-        createdAt: userData.created_at
-          ? new Date(userData.created_at).toISOString()
-          : new Date().toISOString(),
-        updatedAt: userData.updated_at
-          ? new Date(userData.updated_at).toISOString()
-          : new Date().toISOString(),
-        userType,
-        role,
-        extraRoles,
-      };
-    } catch (error) {
-      logError(this.logger, 'Unexpected error in validateToken', error);
-      return {
-        isValid: false,
-        error: 'Invalid or expired token',
-      };
     }
+
+    return { userData, userType: resolvedUserType, role, extraRoles };
+  }
+
+  private buildValidTokenResponse(
+    userData: {
+      id: string;
+      email?: string;
+      name: string;
+      role?: string;
+      extraRoles?: string[];
+      userType: 'user' | 'client';
+      created_at: Date;
+      updated_at: Date;
+    },
+    userType: 'user' | 'client',
+    role: string | null,
+    extraRoles: string[] | null,
+  ) {
+    return {
+      isValid: true,
+      userId: userData.id,
+      email: userData.email || userData.name,
+      name: userData.name,
+      isActive: true,
+      createdAt: userData.created_at
+        ? new Date(userData.created_at).toISOString()
+        : new Date().toISOString(),
+      updatedAt: userData.updated_at
+        ? new Date(userData.updated_at).toISOString()
+        : new Date().toISOString(),
+      userType,
+      role,
+      extraRoles,
+    };
+  }
+
+  private buildInvalidTokenResponse(errorMessage: string) {
+    return {
+      isValid: false,
+      error: errorMessage,
+    };
   }
 }
