@@ -21,6 +21,16 @@ import { RegisterClientDto } from './dto/register-client.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { UserPayload, AuthResponse } from './entities/user.entity';
 
+type ValidationUserData = {
+  id: string;
+  email?: string;
+  name: string;
+  role?: string;
+  extraRoles?: string[];
+  created_at: Date;
+  updated_at: Date;
+};
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -306,7 +316,6 @@ export class AuthService {
     }
 
     try {
-      // 1. Buscar primero en usuarios
       let userData: {
         id: string;
         email?: string;
@@ -315,37 +324,37 @@ export class AuthService {
         updated_at: Date;
       } | null = null;
       let resolvedUserType: 'user' | 'client' = 'user';
+
       try {
-        const foundUser = await this.userClient
-          .send(getMessagePattern('findUserById'), userId)
+        const foundClient = await this.userClient
+          .send(getMessagePattern('findClientById'), userId)
           .toPromise();
-        if (foundUser) {
-          userData = foundUser;
-          resolvedUserType = 'user';
+        if (foundClient) {
+          userData = foundClient;
+          resolvedUserType = 'client';
         }
       } catch (error) {
         logError(
           this.logger,
-          `User lookup by id failed (refreshToken) for userId: ${userId}`,
+          `Client lookup by id failed (refreshToken primary) for userId: ${userId}`,
           error,
         );
       }
 
-      // 2. Si no existe, buscar en clientes
+      // 2. Si no es cliente, buscar en usuarios
       if (!userData) {
         try {
-          // Nota: findClientById puede no usar getMessagePattern según validateToken
-          const foundClient = await this.userClient
-            .send(getMessagePattern('findClientById'), userId)
+          const foundUser = await this.userClient
+            .send(getMessagePattern('findUserById'), userId)
             .toPromise();
-          if (foundClient) {
-            userData = foundClient;
-            resolvedUserType = 'client';
+          if (foundUser) {
+            userData = foundUser;
+            resolvedUserType = 'user';
           }
         } catch (error) {
           logError(
             this.logger,
-            `Client lookup by id failed (refreshToken fallback) for userId: ${userId}`,
+            `User lookup by id failed (refreshToken fallback) for userId: ${userId}`,
             error,
           );
         }
@@ -412,23 +421,55 @@ export class AuthService {
   // Método para validar JWT (para guards)
   async validateUser(payload: UserPayload) {
     try {
-      // 1. Buscar primero en usuarios
-      let userData = await this.userClient
-        .send('findUserById', payload.sub)
-        .toPromise();
+      // IMPORTANTE:
+      const isClientToken =
+        payload.userType === 'client' || payload.userType === undefined;
 
-      // 2. Si no existe, buscar en clientes
-      if (!userData) {
+      let userData: {
+        id: string;
+        email?: string;
+        name: string;
+        created_at: Date;
+        updated_at: Date;
+      } | null = null;
+
+      if (isClientToken) {
         try {
           userData = await this.userClient
-            .send('findClientById', payload.sub)
+            .send(getMessagePattern('findClientById'), payload.sub)
             .toPromise();
         } catch (error) {
           logError(
             this.logger,
-            'Client lookup by id failed (validateUser)',
+            'Client lookup by id failed (validateUser for client token)',
             error,
           );
+        }
+      } else {
+        try {
+          userData = await this.userClient
+            .send(getMessagePattern('findUserById'), payload.sub)
+            .toPromise();
+        } catch (error) {
+          logError(
+            this.logger,
+            'User lookup by id failed (validateUser for user token)',
+            error,
+          );
+        }
+
+        if (!userData) {
+          try {
+            userData = await this.userClient
+              .send(getMessagePattern('findClientById'), payload.sub)
+              .toPromise();
+          } catch (error) {
+            logError(
+              this.logger,
+              'Client lookup by id failed (validateUser fallback)',
+              error,
+            );
+          }
         }
       }
 
@@ -465,7 +506,10 @@ export class AuthService {
       }
 
       const { userData, userType, role, extraRoles } =
-        await this.findUserOrClientByIdForValidation(payload.sub);
+        await this.findUserOrClientByIdForValidation(
+          payload.sub,
+          (payload.userType as 'user' | 'client' | undefined) ?? undefined,
+        );
 
       if (!userData) {
         return this.buildInvalidTokenResponse('User not found');
@@ -513,83 +557,131 @@ export class AuthService {
     };
   }
 
-  private async findUserOrClientByIdForValidation(id: string): Promise<{
-    userData: {
-      id: string;
-      email?: string;
-      name: string;
-      role?: string;
-      extraRoles?: string[];
-      userType: 'user' | 'client';
-      created_at: Date;
-      updated_at: Date;
-    } | null;
+  private async findUserOrClientByIdForValidation(
+    id: string,
+    hintedUserType?: 'user' | 'client',
+  ): Promise<{
+    userData: ValidationUserData | null;
     userType: 'user' | 'client';
     role: string | null;
     extraRoles: string[] | null;
   }> {
-    let userData: {
-      id: string;
-      email?: string;
-      name: string;
-      role?: string;
-      extraRoles?: string[];
-      userType: 'user' | 'client';
-      created_at: Date;
-      updated_at: Date;
-    } | null = null;
+    const preferClient =
+      hintedUserType === 'client' || hintedUserType === undefined;
+
+    if (preferClient) {
+      return this.findWithClientPreference(id);
+    }
+
+    return this.findWithUserPreference(id);
+  }
+
+  private async findWithClientPreference(id: string): Promise<{
+    userData: ValidationUserData | null;
+    userType: 'user' | 'client';
+    role: string | null;
+    extraRoles: string[] | null;
+  }> {
+    let userData: ValidationUserData | null = null;
     let resolvedUserType: 'user' | 'client' = 'user';
     let role: string | null = null;
     let extraRoles: string[] | null = null;
 
-    try {
-      userData = await this.userClient
-        .send(getMessagePattern('findUserById'), id)
-        .toPromise();
-
-      if (userData) {
+    const clientData = await this.tryGetClientForValidation(id);
+    if (clientData) {
+      userData = clientData;
+      resolvedUserType = 'client';
+      role = null;
+    } else {
+      const userResult = await this.tryGetUserForValidation(id);
+      if (userResult) {
+        userData = userResult;
         resolvedUserType = 'user';
-        role = userData.role ?? null;
-        extraRoles = userData.extraRoles ?? null;
-      }
-    } catch (error) {
-      logError(this.logger, 'User lookup by id failed (validateToken)', error);
-    }
-
-    if (!userData) {
-      try {
-        const clientData = await this.userClient
-          .send(getMessagePattern('findClientById'), id)
-          .toPromise();
-
-        if (clientData) {
-          userData = clientData;
-          resolvedUserType = 'client';
-          role = null;
-        }
-      } catch (error) {
-        logError(
-          this.logger,
-          'Client lookup by id failed (validateToken)',
-          error,
-        );
+        role = userResult.role ?? null;
+        extraRoles = userResult.extraRoles ?? null;
       }
     }
 
     return { userData, userType: resolvedUserType, role, extraRoles };
   }
 
+  private async findWithUserPreference(id: string): Promise<{
+    userData: ValidationUserData | null;
+    userType: 'user' | 'client';
+    role: string | null;
+    extraRoles: string[] | null;
+  }> {
+    let userData: ValidationUserData | null = null;
+    let resolvedUserType: 'user' | 'client' = 'user';
+    let role: string | null = null;
+    let extraRoles: string[] | null = null;
+
+    const userResult = await this.tryGetUserForValidation(id);
+    if (userResult) {
+      userData = userResult;
+      resolvedUserType = 'user';
+      role = userResult.role ?? null;
+      extraRoles = userResult.extraRoles ?? null;
+    } else {
+      const clientData = await this.tryGetClientForValidation(id);
+      if (clientData) {
+        userData = clientData;
+        resolvedUserType = 'client';
+        role = null;
+      }
+    }
+
+    return { userData, userType: resolvedUserType, role, extraRoles };
+  }
+
+  private async tryGetClientForValidation(
+    id: string,
+  ): Promise<ValidationUserData | null> {
+    try {
+      const clientData = await this.userClient
+        .send(getMessagePattern('findClientById'), id)
+        .toPromise();
+
+      if (!clientData) {
+        return null;
+      }
+
+      return clientData as ValidationUserData;
+    } catch (error) {
+      logError(
+        this.logger,
+        'Client lookup by id failed (validateToken, hinted client)',
+        error,
+      );
+      return null;
+    }
+  }
+
+  private async tryGetUserForValidation(
+    id: string,
+  ): Promise<ValidationUserData | null> {
+    try {
+      const userData = await this.userClient
+        .send(getMessagePattern('findUserById'), id)
+        .toPromise();
+
+      if (!userData) {
+        return null;
+      }
+
+      return userData as ValidationUserData;
+    } catch (error) {
+      logError(
+        this.logger,
+        'User lookup by id failed (validateToken, hinted user/default)',
+        error,
+      );
+      return null;
+    }
+  }
+
   private buildValidTokenResponse(
-    userData: {
-      id: string;
-      email?: string;
-      name: string;
-      role?: string;
-      extraRoles?: string[];
-      userType: 'user' | 'client';
-      created_at: Date;
-      updated_at: Date;
-    },
+    userData: ValidationUserData,
     userType: 'user' | 'client',
     role: string | null,
     extraRoles: string[] | null,
