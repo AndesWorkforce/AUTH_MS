@@ -9,7 +9,7 @@ services:
   # ─── NATS message broker ────────────────────────────────────────────────────
   nats:
     image: nats:2.10-alpine
-    container_name: andes-nats
+    container_name: andes-auth-nats
     restart: unless-stopped
     command:
       - "--user"
@@ -29,8 +29,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Auth Microservice ──────────────────────────────────────────────────────
-  auth-ms:
+  # ─── User Microservice ──────────────────────────────────────────────────────
+  user-ms:
     build:
       context: .
       dockerfile: Dockerfile
@@ -38,20 +38,20 @@ services:
     container_name: andes-auth-ms
     restart: unless-stopped
     ports:
-      - "${PORT:-3003}:3003"
+      - "${PORT:-3004}:3004"
     env_file:
       - .env
     environment:
-      PORT: ${PORT:-3003}
+      PORT: ${PORT:-3004}
+      DATABASE_URL: ${DATABASE_URL:-"postgres://postgres:RHINa5k5dGKImzD7fAUUuufhT9e1AwFYUnGUdFEYClSpKIi0XadlBOCTPS04KWb5@72.61.129.234:9001/user_db?schema=public"}
       NATS_HOST: ${NATS_HOST:-72.61.129.234}
       NATS_PORT: ${NATS_PORT:-4222}
       NATS_USERNAME: ${NATS_USERNAME:-andes_nats}
       NATS_PASSWORD: ${NATS_PASSWORD:-andesworkforce_nats}
-      JWT_SECRET_PASSWORD: ${JWT_SECRET_PASSWORD:-andesmetrics}
       DEV_LOGS: ${DEV_LOGS:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3003/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3004/health"]
       interval: 15s
       timeout: 5s
       retries: 5
