@@ -1,148 +1,393 @@
 import {
   Injectable,
   UnauthorizedException,
-  ConflictException,
   Inject,
+  Logger,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ClientProxy } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import * as bcrypt from 'bcryptjs';
 
+import { envs, getMessagePattern, logError } from 'config';
+
+import {
+  ValidationException,
+  DuplicateEntityException,
+  EntityNotFoundException,
+} from '../common';
 import { LoginDto, RefreshTokenDto } from './dto/login-auth.dto';
-import { RegisterDto } from './dto/register-auth.dto';
+import { RegisterClientDto } from './dto/register-client.dto';
+import { RegisterUserDto } from './dto/register-user.dto';
 import { UserPayload, AuthResponse } from './entities/user.entity';
-import { PrismaService } from '../prisma/prisma.service';
+
+type ValidationUserData = {
+  id: string;
+  email?: string;
+  name: string;
+  role?: string;
+  extraRoles?: string[];
+  created_at: Date;
+  updated_at: Date;
+};
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private refreshTokens: Map<string, string> = new Map();
 
   constructor(
     private readonly jwtService: JwtService,
-    private readonly prisma: PrismaService,
     @Inject('USER_SERVICE') private readonly userClient: ClientProxy,
   ) {}
 
-  async register(registerDto: RegisterDto): Promise<AuthResponse> {
-    const { email, password } = registerDto;
+  async registerUser(registerDto: RegisterUserDto): Promise<AuthResponse> {
+    if (!registerDto.name) {
+      throw new ConflictException('The name field is required');
+    }
+    if (!registerDto.email) {
+      throw new ConflictException('The email field is required');
+    }
+    if (!registerDto.password) {
+      throw new ConflictException('The password field is required');
+    }
+    if (!registerDto.role) {
+      throw new ConflictException('The role field is required');
+    }
 
-    const existing = await this.prisma.authUser.findUnique({
-      where: { email },
-    });
-    if (existing) throw new ConflictException('El usuario ya existe');
+    const { password } = registerDto;
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Crear solo datos de autenticación
-    const created = await this.prisma.authUser.create({
-      data: {
-        email,
-        password: hashedPassword,
-      },
-    });
+    // Preparar el payload completo ANTES de enviarlo
+    const userPayload = {
+      name: registerDto.name,
+      email: registerDto.email,
+      password: hashedPassword,
+      role: registerDto.role,
+    };
 
-    const tokens = await this.generateTokens({
-      sub: created.id,
-      email: created.email,
-      name: `${registerDto.nombre} ${registerDto.apellido}`,
-    });
-
-    // Crear usuario completo en user-ms vía NATS
     try {
-      await this.userClient
-        .send('createUser', {
-          auth_user_id: created.id,
-          nombre: registerDto.nombre,
-          apellido: registerDto.apellido,
-          email: registerDto.email,
-          password: hashedPassword, // Agregar password
-          puesto_trabajo: registerDto.puesto_trabajo,
-          horario_laboral_inicio: registerDto.horario_laboral_inicio,
-          horario_laboral_fin: registerDto.horario_laboral_fin,
-          cliente_id: registerDto.cliente_id,
-          team_id: registerDto.team_id,
-          subteam_id: registerDto.subteam_id,
-        })
+      const createdUser = await this.userClient
+        .send(getMessagePattern('createUser'), userPayload)
         .toPromise();
+
+      const tokens = await this.generateTokens({
+        sub: createdUser.id,
+        email: createdUser.email,
+        name: registerDto.name,
+        userType: 'user',
+      });
+
+      return {
+        user: {
+          id: createdUser.id,
+          email: createdUser.email,
+          name: registerDto.name,
+          userType: 'user',
+          isActive: true,
+          createdAt: createdUser.created_at,
+          updatedAt: createdUser.updated_at,
+        },
+        ...tokens,
+      };
     } catch (error) {
-      // Si falla la creación en user-ms, eliminar el usuario de auth
-      await this.prisma.authUser.delete({ where: { id: created.id } });
-      console.error('Error al crear usuario en user-ms:', error);
-      throw new Error(
-        `Error al crear usuario completo: ${error.message}. Por favor, intente nuevamente.`,
+      logError(this.logger, 'Error creating user in user-ms', error);
+
+      if (
+        error?.message?.includes('already exists') ||
+        error?.message?.includes('duplicate')
+      ) {
+        throw new DuplicateEntityException('User', 'email', registerDto.email);
+      }
+
+      throw new ValidationException(
+        `Error creating user: ${error.message}. Please try again.`,
       );
     }
+  }
 
-    return {
-      user: {
-        id: created.id,
-        email: created.email,
-        name: `${registerDto.nombre} ${registerDto.apellido}`,
-        isActive: created.isActive,
-        createdAt: created.createdAt,
-        updatedAt: created.updatedAt,
-      },
-      ...tokens,
-    };
+  async registerClient(registerDto: RegisterClientDto): Promise<AuthResponse> {
+    try {
+      // Hash password if provided
+      const clientData: {
+        name: string;
+        description?: string;
+        email?: string;
+        password?: string;
+      } = {
+        name: registerDto.name,
+        description: registerDto.description,
+        email: registerDto.email,
+      };
+
+      if (registerDto.password) {
+        const hashedPassword = await bcrypt.hash(registerDto.password, 10);
+        clientData.password = hashedPassword;
+      }
+
+      const createdClient = await this.userClient
+        .send(getMessagePattern('createClient'), clientData)
+        .toPromise();
+
+      const tokens = await this.generateTokens({
+        sub: createdClient.id,
+        email: createdClient.email || createdClient.name,
+        name: createdClient.name,
+        userType: 'client',
+      });
+
+      return {
+        user: {
+          id: createdClient.id,
+          email: createdClient.email || createdClient.name,
+          name: createdClient.name,
+          userType: 'client',
+          isActive: true,
+          createdAt: createdClient.created_at,
+          updatedAt: createdClient.updated_at,
+        },
+        ...tokens,
+      };
+    } catch (error) {
+      logError(this.logger, 'Error creating client in user-ms', error);
+
+      // Handle duplicate entity exception from USER_MS
+      if (error?.statusCode === 409 || error?.status === 409) {
+        // This is a DuplicateEntityException from USER_MS
+        throw error; // Re-throw the exception as-is
+      }
+
+      if (
+        error?.message?.includes('already exists') ||
+        error?.message?.includes('duplicate') ||
+        error?.code === 'P2002'
+      ) {
+        const field = error?.field || 'name';
+        const value = error?.value || registerDto.name || registerDto.email;
+        throw new DuplicateEntityException('Client', field, value);
+      }
+
+      throw new ValidationException(
+        `Error creating client: ${error.message || 'Unknown error'}. Please try again.`,
+      );
+    }
   }
 
   async login(loginDto: LoginDto): Promise<AuthResponse> {
     const { email, password } = loginDto;
 
-    const user = await this.prisma.authUser.findUnique({ where: { email } });
-    if (!user) throw new UnauthorizedException('Credenciales inválidas');
+    try {
+      const userData = await this.findUserOrClientByEmail(email);
+      if (!userData) {
+        throw new RpcException({
+          status: 'error',
+          message: 'Invalid credentials',
+        });
+      }
 
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) throw new UnauthorizedException('Credenciales inválidas');
+      await this.validatePassword(password, userData.password);
 
-    // Obtener datos completos del usuario desde user-ms vía NATS
-    const userData = await this.userClient
-      .send('findUserByAuthId', user.id)
-      .toPromise();
+      const tokens = await this.generateTokens({
+        sub: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+        userType: userData.userType,
+      });
 
-    const tokens = await this.generateTokens({
-      sub: user.id,
-      email: user.email,
-      name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-    });
+      const extraRoles = this.normalizeExtraRoles(userData.extraRoles);
 
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-        isActive: user.isActive,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-      },
-      ...tokens,
-    };
+      return {
+        user: {
+          id: userData.id,
+          email: userData.email || userData.name,
+          name: userData.name,
+          role: userData.role,
+          extraRoles,
+          userType: userData.userType,
+          isActive: true,
+          createdAt: userData.created_at,
+          updatedAt: userData.updated_at,
+        },
+        ...tokens,
+      };
+    } catch (error) {
+      logError(this.logger, 'Error during login', error);
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      throw new RpcException({
+        status: 'error',
+        message: 'Error authenticating user',
+      });
+    }
+  }
+
+  private async findUserOrClientByEmail(email: string): Promise<{
+    userType: 'user' | 'client';
+    id: string;
+    email?: string;
+    name: string;
+    password?: string;
+    role?: string;
+    extraRoles?: string[];
+    created_at: Date;
+    updated_at: Date;
+  } | null> {
+    try {
+      const foundUser = await this.userClient
+        .send(getMessagePattern('findUserByEmail'), email)
+        .toPromise();
+      if (foundUser) {
+        return {
+          ...foundUser,
+          userType: 'user',
+        };
+      }
+    } catch {}
+
+    try {
+      const foundClient = await this.userClient
+        .send(getMessagePattern('findClientByEmail'), email)
+        .toPromise();
+      if (foundClient) {
+        return {
+          ...foundClient,
+          userType: 'client',
+        };
+      }
+    } catch {}
+
+    return null;
+  }
+
+  private async validatePassword(
+    providedPassword: string | undefined,
+    storedPassword: string | undefined,
+  ): Promise<void> {
+    if (!providedPassword) {
+      throw new RpcException({
+        status: 'error',
+        message: 'Invalid credentials',
+      });
+    }
+
+    if (!storedPassword) {
+      throw new RpcException({
+        status: 'error',
+        message: 'Invalid credentials',
+      });
+    }
+
+    const ok = await bcrypt.compare(providedPassword, storedPassword);
+    if (!ok) {
+      throw new RpcException({
+        status: 'error',
+        message: 'Invalid credentials',
+      });
+    }
+  }
+
+  private normalizeExtraRoles(
+    extraRoles: string[] | undefined,
+  ): string[] | undefined {
+    if (extraRoles && Array.isArray(extraRoles) && extraRoles.length > 0) {
+      return extraRoles;
+    }
+    return undefined;
   }
 
   async refreshToken(
     refreshTokenDto: RefreshTokenDto,
   ): Promise<{ accessToken: string }> {
     const { refreshToken } = refreshTokenDto;
+
+    if (!refreshToken) {
+      this.logger.warn('Refresh token not provided');
+      throw new UnauthorizedException('Refresh token is required');
+    }
+
     const userId = this.refreshTokens.get(refreshToken);
-    if (!userId) throw new UnauthorizedException('Refresh token inválido');
+    if (!userId) {
+      this.logger.warn(
+        `Invalid refresh token: ${refreshToken.substring(0, 10)}...`,
+      );
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
-    const user = await this.prisma.authUser.findUnique({
-      where: { id: userId },
-    });
-    if (!user) throw new UnauthorizedException('Usuario no encontrado');
+    try {
+      let userData: {
+        id: string;
+        email?: string;
+        name: string;
+        created_at: Date;
+        updated_at: Date;
+      } | null = null;
+      let resolvedUserType: 'user' | 'client' = 'user';
 
-    // Obtener datos completos del usuario desde user-ms vía NATS
-    const userData = await this.userClient
-      .send('findUserByAuthId', user.id)
-      .toPromise();
+      try {
+        const foundClient = await this.userClient
+          .send(getMessagePattern('findClientById'), userId)
+          .toPromise();
+        if (foundClient) {
+          userData = foundClient;
+          resolvedUserType = 'client';
+        }
+      } catch (error) {
+        logError(
+          this.logger,
+          `Client lookup by id failed (refreshToken primary) for userId: ${userId}`,
+          error,
+        );
+      }
 
-    const payload: UserPayload = {
-      sub: user.id,
-      email: user.email,
-      name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-    };
-    const accessToken = this.jwtService.sign(payload);
-    return { accessToken };
+      // 2. Si no es cliente, buscar en usuarios
+      if (!userData) {
+        try {
+          const foundUser = await this.userClient
+            .send(getMessagePattern('findUserById'), userId)
+            .toPromise();
+          if (foundUser) {
+            userData = foundUser;
+            resolvedUserType = 'user';
+          }
+        } catch (error) {
+          logError(
+            this.logger,
+            `User lookup by id failed (refreshToken fallback) for userId: ${userId}`,
+            error,
+          );
+        }
+      }
+
+      if (!userData) {
+        this.logger.error(
+          `User not found for refresh token. userId: ${userId}, refreshToken: ${refreshToken.substring(0, 10)}...`,
+        );
+        throw new EntityNotFoundException('User', userId);
+      }
+
+      const payload: UserPayload = {
+        sub: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+        userType: resolvedUserType,
+      };
+      const accessToken = this.jwtService.sign(payload);
+      this.logger.debug(
+        `Token refreshed successfully for user: ${userData.id}`,
+      );
+      return { accessToken };
+    } catch (error) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof EntityNotFoundException
+      ) {
+        throw error;
+      }
+      logError(this.logger, 'Error refreshing token', error);
+      throw new UnauthorizedException('Error renewing token');
+    }
   }
 
   logout(logoutDto: RefreshTokenDto): Promise<{ message: string }> {
@@ -151,13 +396,13 @@ export class AuthService {
     // Eliminar refresh token
     this.refreshTokens.delete(refreshToken);
 
-    return Promise.resolve({ message: 'Logout exitoso' });
+    return Promise.resolve({ message: 'Logout successful' });
   }
 
   private generateTokens(
     payload: UserPayload,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
     const refreshToken = this.jwtService.sign(
       { sub: payload.sub },
       { expiresIn: '7d' },
@@ -175,24 +420,294 @@ export class AuthService {
 
   // Método para validar JWT (para guards)
   async validateUser(payload: UserPayload) {
-    const user = await this.prisma.authUser.findUnique({
-      where: { id: payload.sub },
-    });
+    try {
+      // IMPORTANTE:
+      const isClientToken =
+        payload.userType === 'client' || payload.userType === undefined;
 
-    if (!user) return null;
+      let userData: {
+        id: string;
+        email?: string;
+        name: string;
+        created_at: Date;
+        updated_at: Date;
+      } | null = null;
 
-    // Obtener datos completos del usuario desde user-ms vía NATS
-    const userData = await this.userClient
-      .send('findUserByAuthId', user.id)
-      .toPromise();
+      if (isClientToken) {
+        try {
+          userData = await this.userClient
+            .send(getMessagePattern('findClientById'), payload.sub)
+            .toPromise();
+        } catch (error) {
+          logError(
+            this.logger,
+            'Client lookup by id failed (validateUser for client token)',
+            error,
+          );
+        }
+      } else {
+        try {
+          userData = await this.userClient
+            .send(getMessagePattern('findUserById'), payload.sub)
+            .toPromise();
+        } catch (error) {
+          logError(
+            this.logger,
+            'User lookup by id failed (validateUser for user token)',
+            error,
+          );
+        }
+
+        if (!userData) {
+          try {
+            userData = await this.userClient
+              .send(getMessagePattern('findClientById'), payload.sub)
+              .toPromise();
+          } catch (error) {
+            logError(
+              this.logger,
+              'Client lookup by id failed (validateUser fallback)',
+              error,
+            );
+          }
+        }
+      }
+
+      if (!userData) return null;
+
+      return {
+        id: userData.id,
+        email: userData.email || userData.name,
+        name: userData.name,
+        isActive: true,
+        createdAt: userData.created_at,
+        updatedAt: userData.updated_at,
+      };
+    } catch (error) {
+      logError(this.logger, 'Error validating user', error);
+      return null;
+    }
+  }
+
+  async validateToken(token: string) {
+    try {
+      if (!token) {
+        return this.buildInvalidTokenResponse('Token not provided');
+      }
+
+      const payload = this.verifyJwtToken(token);
+      if (!payload) {
+        return this.buildInvalidTokenResponse('Invalid or expired token');
+      }
+
+      const agentResult = this.buildAgentTokenResponseIfApplicable(payload);
+      if (agentResult) {
+        return agentResult;
+      }
+
+      const { userData, userType, role, extraRoles } =
+        await this.findUserOrClientByIdForValidation(
+          payload.sub,
+          (payload.userType as 'user' | 'client' | undefined) ?? undefined,
+        );
+
+      if (!userData) {
+        return this.buildInvalidTokenResponse('User not found');
+      }
+
+      return this.buildValidTokenResponse(userData, userType, role, extraRoles);
+    } catch (error) {
+      logError(this.logger, 'Unexpected error in validateToken', error);
+      return this.buildInvalidTokenResponse('Invalid or expired token');
+    }
+  }
+
+  private verifyJwtToken(
+    token: string,
+  ): (UserPayload & { userType?: string }) | null {
+    try {
+      return this.jwtService.verify(token, {
+        secret: envs.jwtSecretPassword,
+      }) as UserPayload & { userType?: string };
+    } catch {
+      return null;
+    }
+  }
+
+  private buildAgentTokenResponseIfApplicable(
+    payload: UserPayload & { userType?: string },
+  ) {
+    if (payload.userType !== 'agent' && payload.sub !== 'agent-bootstrap') {
+      return null;
+    }
+
+    const nowIso = new Date().toISOString();
 
     return {
-      id: user.id,
-      email: user.email,
-      name: userData ? `${userData.nombre} ${userData.apellido}` : 'Usuario',
-      isActive: user.isActive,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
+      isValid: true,
+      userId: payload.sub,
+      email: payload.email ?? 'agent@system',
+      name: payload.name ?? 'Agent Bootstrap',
+      isActive: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      userType: 'agent' as const,
+      role: null,
+      extraRoles: null,
+    };
+  }
+
+  private async findUserOrClientByIdForValidation(
+    id: string,
+    hintedUserType?: 'user' | 'client',
+  ): Promise<{
+    userData: ValidationUserData | null;
+    userType: 'user' | 'client';
+    role: string | null;
+    extraRoles: string[] | null;
+  }> {
+    const preferClient =
+      hintedUserType === 'client' || hintedUserType === undefined;
+
+    if (preferClient) {
+      return this.findWithClientPreference(id);
+    }
+
+    return this.findWithUserPreference(id);
+  }
+
+  private async findWithClientPreference(id: string): Promise<{
+    userData: ValidationUserData | null;
+    userType: 'user' | 'client';
+    role: string | null;
+    extraRoles: string[] | null;
+  }> {
+    let userData: ValidationUserData | null = null;
+    let resolvedUserType: 'user' | 'client' = 'user';
+    let role: string | null = null;
+    let extraRoles: string[] | null = null;
+
+    const clientData = await this.tryGetClientForValidation(id);
+    if (clientData) {
+      userData = clientData;
+      resolvedUserType = 'client';
+      role = null;
+    } else {
+      const userResult = await this.tryGetUserForValidation(id);
+      if (userResult) {
+        userData = userResult;
+        resolvedUserType = 'user';
+        role = userResult.role ?? null;
+        extraRoles = userResult.extraRoles ?? null;
+      }
+    }
+
+    return { userData, userType: resolvedUserType, role, extraRoles };
+  }
+
+  private async findWithUserPreference(id: string): Promise<{
+    userData: ValidationUserData | null;
+    userType: 'user' | 'client';
+    role: string | null;
+    extraRoles: string[] | null;
+  }> {
+    let userData: ValidationUserData | null = null;
+    let resolvedUserType: 'user' | 'client' = 'user';
+    let role: string | null = null;
+    let extraRoles: string[] | null = null;
+
+    const userResult = await this.tryGetUserForValidation(id);
+    if (userResult) {
+      userData = userResult;
+      resolvedUserType = 'user';
+      role = userResult.role ?? null;
+      extraRoles = userResult.extraRoles ?? null;
+    } else {
+      const clientData = await this.tryGetClientForValidation(id);
+      if (clientData) {
+        userData = clientData;
+        resolvedUserType = 'client';
+        role = null;
+      }
+    }
+
+    return { userData, userType: resolvedUserType, role, extraRoles };
+  }
+
+  private async tryGetClientForValidation(
+    id: string,
+  ): Promise<ValidationUserData | null> {
+    try {
+      const clientData = await this.userClient
+        .send(getMessagePattern('findClientById'), id)
+        .toPromise();
+
+      if (!clientData) {
+        return null;
+      }
+
+      return clientData as ValidationUserData;
+    } catch (error) {
+      logError(
+        this.logger,
+        'Client lookup by id failed (validateToken, hinted client)',
+        error,
+      );
+      return null;
+    }
+  }
+
+  private async tryGetUserForValidation(
+    id: string,
+  ): Promise<ValidationUserData | null> {
+    try {
+      const userData = await this.userClient
+        .send(getMessagePattern('findUserById'), id)
+        .toPromise();
+
+      if (!userData) {
+        return null;
+      }
+
+      return userData as ValidationUserData;
+    } catch (error) {
+      logError(
+        this.logger,
+        'User lookup by id failed (validateToken, hinted user/default)',
+        error,
+      );
+      return null;
+    }
+  }
+
+  private buildValidTokenResponse(
+    userData: ValidationUserData,
+    userType: 'user' | 'client',
+    role: string | null,
+    extraRoles: string[] | null,
+  ) {
+    return {
+      isValid: true,
+      userId: userData.id,
+      email: userData.email || userData.name,
+      name: userData.name,
+      isActive: true,
+      createdAt: userData.created_at
+        ? new Date(userData.created_at).toISOString()
+        : new Date().toISOString(),
+      updatedAt: userData.updated_at
+        ? new Date(userData.updated_at).toISOString()
+        : new Date().toISOString(),
+      userType,
+      role,
+      extraRoles,
+    };
+  }
+
+  private buildInvalidTokenResponse(errorMessage: string) {
+    return {
+      isValid: false,
+      error: errorMessage,
     };
   }
 }
