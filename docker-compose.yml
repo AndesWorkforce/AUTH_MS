@@ -42,6 +42,7 @@ services:
     env_file:
       - .env
     environment:
+      TZ: America/New_York
       PORT: ${PORT:-3004}
       DATABASE_URL: ${DATABASE_URL:-"postgres://postgres:RHINa5k5dGKImzD7fAUUuufhT9e1AwFYUnGUdFEYClSpKIi0XadlBOCTPS04KWb5@72.61.129.234:9001/user_db?schema=public"}
       NATS_HOST: ${NATS_HOST:-72.61.129.234}
