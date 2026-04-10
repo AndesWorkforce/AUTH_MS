@@ -1,0 +1,59 @@
+# docker-compose-deployment.yml — Desarrollo local (NATS + build de auth-ms)
+#
+# Producción Swarm / Portainer: usar docker-compose.yml
+#
+# Usage:
+#   1. Copy .env.template to .env and fill in your values
+#   2. docker compose -f docker-compose-deployment.yml up --build
+
+services:
+  # ─── NATS message broker ────────────────────────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    container_name: andes-auth-nats
+    restart: unless-stopped
+    command:
+      - "--user"
+      - "${NATS_USERNAME:-andes_nats}"
+      - "--pass"
+      - "${NATS_PASSWORD:-andesworkforce_nats}"
+      - "--port"
+      - "4222"
+      - "-m"
+      - "8222" # enable HTTP monitoring endpoint
+    ports:
+      - "4222:4222" # client connections
+      - "8222:8222" # HTTP monitoring (optional)
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── User Microservice ──────────────────────────────────────────────────────
+  user-ms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: andes-auth-ms
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3004}:3004"
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-3004}
+      DATABASE_URL: ${DATABASE_URL:-"postgres://postgres:RHINa5k5dGKImzD7fAUUuufhT9e1AwFYUnGUdFEYClSpKIi0XadlBOCTPS04KWb5@72.61.129.234:9001/user_db?schema=public"}
+      NATS_HOST: ${NATS_HOST:-72.61.129.234}
+      NATS_PORT: ${NATS_PORT:-4222}
+      NATS_USERNAME: ${NATS_USERNAME:-andes_nats}
+      NATS_PASSWORD: ${NATS_PASSWORD:-andesworkforce_nats}
+      DEV_LOGS: ${DEV_LOGS:-true}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
